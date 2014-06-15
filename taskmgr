@@ -138,11 +138,15 @@ if __name__ == '__main__':
         # call the command
         if action == "check":
             # run the check, fail if result is false
-            hosts = [ "3capp-webde-dev01" ]
+            hosts = [ "3capp-webde-dev01", "3capp-webde-dev02" ]
             check_name = config["cluster"][args.cluster_name][cmd_name].split(":")[0]
             check_arguments = ":".join(config["cluster"][args.cluster_name][cmd_name].split(":")[1:])
             result = execute(check_name, check_arguments, hosts=hosts)
-            print "result is: %s" % result
+            print result
+            if result[env.host_string]: 
+                print "all ok"
+            else:
+                print "Failed"
         elif action == "wait":
             # stop and wait until check returns true
             pass
