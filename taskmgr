@@ -1,0 +1,161 @@
+#!/usr/bin/env python
+# -*- coding: UTF-8 -*-
+from fabric import main as fabricmain
+from fabric.api import *
+import argparse
+import logging
+import configparser
+import os.path
+import sys
+
+__version__ = "0.0.1"
+
+class OperationException(Exception):
+    pass
+
+class TaskMgr(object):
+
+    def __init__(self):
+        # read cli arguments
+        self.args = self.parse_cli_args()
+        self.config = dict()
+        # initialize logger
+        try:
+            self.l = self.initialize_logger(None, self.args.debug)
+        except Exception as e:
+            print "Can't initialize logger!"
+            sys.exit(1)
+
+    def get_arguments(self):
+        return self.args
+
+    def get_logger(self):
+        return self.l
+
+    def initialize_logger(self, logfile, debug, logformat='%(asctime)s - %(levelname)s - %(message)s'):
+        """ initialize logging - console """
+        if debug:
+            loglevel = logging.DEBUG
+        else:
+            loglevel = logging.INFO
+
+        l = logging.getLogger()
+        l.setLevel(loglevel)
+
+        ch = logging.StreamHandler(sys.stdout)
+        ch.setLevel(loglevel)
+        formatter = logging.Formatter(logformat)
+        ch.setFormatter(formatter)
+        l.addHandler(ch)
+
+        return l
+
+    def read_configuration(self, configfile, ctype, allow_no_value=False):
+        config = configparser.ConfigParser(allow_no_value=allow_no_value)
+        config._interpolation = configparser.ExtendedInterpolation()
+        try:
+            config.read(configfile)
+        except Exception as e:
+            raise OperationException("Failed to read type '%s' config file %s: %s" % (ctype, configfile, str(e)))
+        self.config[ctype] = config._sections
+
+    def get_configuration(self, ctype):
+        return self.config[ctype]
+    
+    def handle_exception(self, exception, fatal=True):
+        if type(exception) == OperationException:
+            self.l.critical(e)
+            self._exit_if_fatal(fatal)
+
+        if type(exception) == str:
+            self.l.critical(exception)
+            self._exit_if_fatal(fatal)
+
+        else:
+            self.l.critical("Unknown exception type: %s" % type(exception))
+            self._exit_if_fatal(fatal)
+
+
+    def _exit_if_fatal(self, fatal=True):
+        if fatal:
+            sys.exit(1)
+
+    def parse_cli_args(self):
+        # parse command line arguments
+        parser = argparse.ArgumentParser()
+        parser.add_argument("-v", "--version", action="version", version=__version__)
+        parser.add_argument("--cluster-config", help="The location of the cluster configuration file", default="cluster.ini")
+        parser.add_argument("--command-config", help="The location of the cluster configuration file", default="commands.ini")
+        parser.add_argument("-n", "--cluster-name", help="The name of the cluster to work on", required=True)
+        parser.add_argument("-c", "--command", help="THe name of the command to run", required=True)
+        parser.add_argument("-d", "--debug", help="Show debug information", action="store_true", default=False)
+        args = parser.parse_args()
+        return args
+
+
+###################################################################################3
+
+if __name__ == '__main__':
+
+    # load available fabric task files 
+    # http://stackoverflow.com/questions/23605418/in-fabric-how-can-i-execute-tasks-from-another-python-file
+    docstring, callables, default = fabricmain.load_fabfile('fabfile')
+    fabricmain.state.commands.update(callables)
+
+    config = dict()
+
+    # create taskmanager object
+    taskmgr = TaskMgr()
+    args = taskmgr.get_arguments()
+    # parse the cluster configuration
+    try:
+        taskmgr.read_configuration(args.cluster_config, ctype="cluster")
+    except OperationException as e:
+        taskmgr.handle_exception(e)
+    # get the parsed configuration in the form of a dict
+    config["cluster"] = taskmgr.get_configuration("cluster")
+
+    # parse the command configuration
+    try:
+        taskmgr.read_configuration(args.command_config, ctype="command", allow_no_value=True)
+    except OperationException as e:
+        taskmgr.handle_exception(e)
+    # get the parsed configuration in the form of a dict
+    config["command"] = taskmgr.get_configuration("command")
+
+    if not args.command in config["command"].keys():
+        taskmgr.handle_exception("Configuration in '%s' for command '%s' doesn't exist!" % (args.command_config, args.command))
+
+    if not args.cluster_name in config["cluster"].keys():
+        taskmgr.handle_exception("Configuration in '%s' for cluster '%s' doesn't exist!" % (args.cluster_config, args.cluster_name))
+
+    # execute the steps in the command definition file
+    for command in config["command"][args.command].keys():
+        (action, cmd_name) = command.split(" ")
+        # pair the check name with the one that is defined in the cluster configuration
+        if not cmd_name in config['cluster'][args.cluster_name]:
+            taskmgr.handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, args.cluster_name))
+        # call the command
+        if action == "check":
+            # run the check, fail if result is false
+            hosts = [ "3capp-webde-dev01" ]
+            check_name = config["cluster"][args.cluster_name][cmd_name].split(":")[0]
+            check_arguments = ":".join(config["cluster"][args.cluster_name][cmd_name].split(":")[1:])
+            result = execute(check_name, check_arguments, hosts=hosts)
+            print "result is: %s" % result
+        elif action == "wait":
+            # stop and wait until check returns true
+            pass
+        else:
+            taskmgr.handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))
+
+    #try:
+    #    print cluster_config[args.cluster_name]["check_host_alive"]
+    #    hosts = [ "3capp-webde-dev01" ]
+    #    result = execute(cluster_config[args.cluster_name]["check_host_alive"], "22", hosts=hosts)
+    #except KeyError:
+    #    taskmgr.handle_exception("Desired cluster '%s' doesn't exist in the cluster configuration file '%s'!" % (args.cluster_name, args.cluster_config))
+    #except Exception as e:
+    #    raise
+    #    #taskmgr.handle_exception(e)
+
