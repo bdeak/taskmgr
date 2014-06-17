@@ -11,28 +11,17 @@ import os
 import time
 import subprocess
 import re
-import gc # for ctrl + c handler
 import signal
 from random import randint
-#from threading import *
 
-#from Queue import Queue
-#from threading import Thread, Lock
+import multiprocessing
+import Queue
 
-#from inspect import getmodule
-from multiprocessing import Pool
 
 __version__ = "0.0.1"
 
 class OperationException(Exception):
     pass
-
-def signal_handler(signal, frame):
-    print "Caught Ctrl + C, cleaning up";
-    for obj in gc.get_objects():
-        if isinstance(obj, TaskMgr):
-            obj.terminate_workers()
-    sys.exit(1)
 
 class TaskMgr(object):
 
@@ -117,79 +106,47 @@ class TaskMgr(object):
         args = parser.parse_args()
         return args
 
-    def worker(self, host, cluster):
-        # create a lock object if it doesn't exist
-        #if not self.lock:
-        #    self.lock = Lock()
-        print "in here"
-        for command in self.config["command"][self.args.command].keys():
-            (action, cmd_name) = command.split(" ")
-            # pair the check name with the one that is defined in the cluster configuration
-            if not cmd_name in self.config['cluster'][cluster]:
-                self.handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, self.args.cluster_config, cluster))
-            # call the command
-            if action == "check":
-                # run the check, fail if result is false
-                check_name = config["cluster"][cluster][cmd_name].split(":")[0]
-                check_arguments = ":".join(config["cluster"][cluster][cmd_name].split(":")[1:])
-                with quiet():
-                    result = execute(check_name, check_arguments, hosts=[host])
-                #with self.lock:          
-                if result[host]:
-                    print "%s: all ok" % cluster
-                else:
-                    print "%s: failed" % cluster
-            elif action == "wait":
-                # stop and wait until check returns true
-                pass
-            else:
-                self.handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))
-        time.sleep(randint(2,9))
+    #def worker(self, host, cluster):
+    #    # create a lock object if it doesn't exist
+    #    #if not self.lock:
+    #    #    self.lock = Lock()
+    #    print "in here"
+    #    for command in self.config["command"][self.args.command].keys():
+    #        (action, cmd_name) = command.split(" ")
+    #        # pair the check name with the one that is defined in the cluster configuration
+    #        if not cmd_name in self.config['cluster'][cluster]:
+    #            self.handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, self.args.cluster_config, cluster))
+    #        # call the command
+    #        if action == "check":
+    #            # run the check, fail if result is false
+    #            check_name = config["cluster"][cluster][cmd_name].split(":")[0]
+    #            check_arguments = ":".join(config["cluster"][cluster][cmd_name].split(":")[1:])
+    #            with quiet():
+    #                result = execute(check_name, check_arguments, hosts=[host])
+    #            #with self.lock:          
+    #            if result[host]:
+    #                print "%s: all ok" % cluster
+    #            else:
+    #                print "%s: failed" % cluster
+    #        elif action == "wait":
+    #            # stop and wait until check returns true
+    #            pass
+    #        else:
+    #            self.handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))
+    #    time.sleep(randint(2,9))
 
-    def worker_cb(self, host, cluster):
-        print "finished with %s on cluster %s" % (host, cluster)
+    #def worker_cb(self, host, cluster):
+    #    print "finished with %s on cluster %s" % (host, cluster)
 
     def append_worker_pool(self, pool):
         self.worker_pools.append(pool)
 
-    def terminate_workers(self):
-        self.l.info("Terminating all running processes")
-        for pool in self.worker_pools:
-            pool.terminate()
-            pool.close()
-
     def get_worker_pools(self):
         return self.worker_pools
 
-#def async(decorated):
-#    r'''Wraps a top-level function around an asynchronous dispatcher.
-#
-#        when the decorated function is called, a task is submitted to a
-#        process pool, and a future object is returned, providing access to an
-#        eventual return value.
-#
-#        The future object has a blocking get() method to access the task
-#        result: it will return immediately if the job is already done, or block
-#        until it completes.
-#
-#        This decorator won't work on methods, due to limitations in Python's
-#        pickling machinery (in principle methods could be made pickleable, but
-#        good luck on that).
-#    '''
-#    # Keeps the original function visible from the module global namespace,
-#    # under a name consistent to its __name__ attribute. This is necessary for
-#    # the multiprocessing pickling machinery to work properly.
-#    module = getmodule(decorated)
-#    decorated.__name__ += '_original'
-#    setattr(module, decorated.__name__, decorated)
-#
-#    def send(*args, **opts):
-#        return async.pool.apply_async(decorated, args, opts)
-#
-#    return send        
-
-#@async
 def worker(host, cluster, config, args):
+    # ignore ctrl c here
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     # create a lock object if it doesn't exist
     #print "starting inside on %s" % host
     for command in config["command"][args.command].keys():
@@ -217,29 +174,59 @@ def worker(host, cluster, config, args):
         else:
             taskmgr.handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))    
 
-    time.sleep(randint(2,9))
+    # fixme: remove this!
+    #time.sleep(randint(2,9))
     return (host, cluster)
 
-def worker_cb(result):
-    pass
-    #host, cluster = result
-    #print "finished with %s of cluster %s" % (host, cluster)
+# due to a possible bug in the signal handling of multiprocessing's Pool implementation
+# we need our own pool management
+# http://bryceboe.com/2010/08/26/python-multiprocessing-and-keyboardinterrupt/
+class AsyncWorker:
+    def __init__(self):
+        self.job_queue = multiprocessing.Queue()
+        self.result_queue = multiprocessing.Queue() 
+        self.workers = list()
 
-# http://www.masnun.com/2014/01/01/async-execution-in-python-using-multiprocessing-pool.html
-class AsyncFactory:
-    def __init__(self, func, cb_func, concurrency=1):
-        self.func = func
-        self.cb_func = cb_func
-        self.pool = Pool(processes=concurrency)
- 
-    def call(self,*args, **kwargs):
-        self.pool.apply_async(self.func, args, kwargs, self.cb_func)
- 
+    def add_job(self, host, cluster, config, args):
+        self.job_queue.put((host, cluster, config, args))
+
+    def start_workers(self, worker_func, max_parallel):
+        for i in range(max_parallel):
+            w = multiprocessing.Process(target=self._worker_helper, args=(worker_func,))
+            w.start()
+            self.workers.append(w)
+
+    def _worker_helper(self, worker_func):
+        while not self.job_queue.empty():
+            try:
+                host, cluster, config, args = self.job_queue.get(block=False)
+                self.result_queue.put(worker_func(host, cluster, config, args)) # fixme, change to kwargs
+            except Queue.Empty:
+                pass
+            except KeyboardInterrupt:
+                pass
+            except Exception:
+                raise
+
     def wait(self):
-        self.pool.close()
-        self.pool.join()
- 
+        for worker in self.workers:
+            worker.join()
 
+    def finish(self):
+        for worker in self.workers:
+            worker.terminate()
+            worker.join()
+
+    def result_queue_empty(self):
+        return self.result_queue.empty()
+
+    def result_queue_get(self, block=False):
+        return self.result_queue.get(block)
+
+    def close_queues(self):
+        while not self.job_queue.empty():
+            self.job_queue.get()
+        self.job_queue.close()
 ###################################################################################3
 
 if __name__ == '__main__':
@@ -248,8 +235,6 @@ if __name__ == '__main__':
     # http://stackoverflow.com/questions/23605418/in-fabric-how-can-i-execute-tasks-from-another-python-file
     docstring, callables, default = fabricmain.load_fabfile('fabfile')
     fabricmain.state.commands.update(callables)
-
-    signal.signal(signal.SIGINT, signal_handler)
 
     config = dict()
 
@@ -300,30 +285,33 @@ if __name__ == '__main__':
                         hosts.append(host.rstrip())
             except Exception as e: 
                 taskmgr.handle_exception("Problem while reading host file '%s': %s" % (args.hosts_file, str(e)))
-        
-        # get a threadpool 
-        #pool = ThreadPool(int(config["cluster"][cluster]["max_parallel"]))
-        
-        #async.pool = Pool(4)
 
-        async_worker = AsyncFactory(worker, worker_cb, int(config["cluster"][cluster]["max_parallel"]))
+        async_worker = AsyncWorker()
         taskmgr.append_worker_pool(async_worker)
 
         # launch workers
         for host in hosts:
-            #print "starting %s" % host
-            #pool.add_task(taskmgr.worker, host, cluster)
-            #taskmgr.worker(host, cluster)
-            #worker(host, cluster, config, args)
-            async_worker.call(host, cluster, config, args)
+            async_worker.add_job(host, cluster, config, args)
+        
+        # launch the workers
+        async_worker.start_workers(worker, int(config["cluster"][cluster]["max_parallel"]))
 
-    # wait until all tasks are done
-    #print "Waiting until all threads are finished..."
-    for pool in taskmgr.get_worker_pools():
-        pool.wait()
-    
-    # fixme: http://bryceboe.com/2010/08/26/python-multiprocessing-and-keyboardinterrupt/
+    try:
+        for async_worker in taskmgr.get_worker_pools():
+            async_worker.wait()
+    except KeyboardInterrupt:
+        print "Received Ctrl + C, exiting..."
+        for async_worker in taskmgr.get_worker_pools():
+            async_worker.finish()
+            async_worker.close_queues()
+        sys.exit(1)
+    #finally:
+    #    for async_worker in taskmgr.get_worker_pools():
+    #        while not async_worker.result_queue_empty():
+    #            print async_worker.result_queue_get(block=False)
+            
 
+    print "OK"
 
     ## execute the steps in the command definition file
     #for command in config["command"][args.command].keys():
