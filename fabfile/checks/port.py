@@ -10,7 +10,7 @@ def check(input_params):
         port1,port2,portN:tcp|udp:multiple=true|false
     """
     # split up the input_params, and make sense of it
-    print "input params are: %s" % input_params
+    #print "input params are: %s" % input_params
     if not re.search("^([0-9]+,?)+:(tcp|udp)(:(true|false))?$", input_params):
         raise AttributeError("The given input_params doesn't match the requirements!")
     port = input_params.split(":")[0].split(",")
@@ -41,10 +41,10 @@ def check_port(host, port, protocol, timeout=5):
         result = sock.connect_ex((host, port))
         sock.close()
         if result == 0:
-            puts("port is open")
+            #puts("port is open")
             return True
         else:
-            puts("port is closed")
+            #puts("port is closed")
             return False
     elif protocol == "udp":
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
