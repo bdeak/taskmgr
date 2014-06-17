@@ -9,8 +9,9 @@ import os.path
 import sys
 import os
 import time
-
-
+import subprocess
+import re
+from random import randint
 #from threading import *
 
 from Queue import Queue
@@ -95,41 +96,68 @@ class TaskMgr(object):
         parser.add_argument("-v", "--version", action="version", version=__version__)
         parser.add_argument("--cluster-config", help="The location of the cluster configuration file", default="cluster.ini")
         parser.add_argument("--command-config", help="The location of the cluster configuration file", default="commands.ini")
-        #parser.add_argument("-H", "--hosts-file", help="File storing the hosts to work on, one by line") # fixme
+        parser.add_argument("--hosts-file", help="File storing the hosts to work on, one by line. If not used, the hostnames from cluster.ini are used.") # fixme
         parser.add_argument("-H", "--hosts", help="Hostnames to work on") # fixme
-        parser.add_argument("-n", "--cluster-name", help="The name of the cluster to work on", required=True)
+        parser.add_argument("-n", "--cluster-name", help="The name of the cluster to work on", action='append', required=True)
         parser.add_argument("-c", "--command", help="THe name of the command to run", required=True)
         parser.add_argument("-d", "--debug", help="Show debug information", action="store_true", default=False)
         args = parser.parse_args()
         return args
 
-    def worker(self, host):
+    def worker(self, host, cluster):
         # create a lock object if it doesn't exist
         if not self.lock:
             self.lock = Lock()
         for command in self.config["command"][self.args.command].keys():
                 (action, cmd_name) = command.split(" ")
                 # pair the check name with the one that is defined in the cluster configuration
-                if not cmd_name in self.config['cluster'][self.args.cluster_name]:
-                    self.handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, self.args.cluster_config, self.args.cluster_name))
+                if not cmd_name in self.config['cluster'][cluster]:
+                    self.handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, self.args.cluster_config, cluster))
                 # call the command
                 if action == "check":
                     # run the check, fail if result is false
-                    check_name = config["cluster"][self.args.cluster_name][cmd_name].split(":")[0]
-                    check_arguments = ":".join(config["cluster"][self.args.cluster_name][cmd_name].split(":")[1:])
+                    check_name = config["cluster"][cluster][cmd_name].split(":")[0]
+                    check_arguments = ":".join(config["cluster"][cluster][cmd_name].split(":")[1:])
                     with quiet():
                         result = execute(check_name, check_arguments, hosts=[host])
                     with self.lock:          
                         if result[host]:
-                            print "all ok"
+                            print "%s: all ok" % cluster
                         else:
-                            print "Failed"
+                            print "%s: failed" % cluster
                 elif action == "wait":
                     # stop and wait until check returns true
                     pass
                 else:
-                    self.handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))    
+                    self.handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))
+        time.sleep(randint(2,9))
 
+def worker(host, config, args, lock, rnd):
+    # create a lock object if it doesn't exist
+    for command in config["command"][args.command].keys():
+            (action, cmd_name) = command.split(" ")
+            # pair the check name with the one that is defined in the cluster configuration
+            if not cmd_name in config['cluster'][args.cluster_name]:
+                taskmgr.handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, args.cluster_name))
+            # call the command
+            if action == "check":
+                # run the check, fail if result is false
+                check_name = config["cluster"][args.cluster_name][cmd_name].split(":")[0]
+                check_arguments = ":".join(config["cluster"][args.cluster_name][cmd_name].split(":")[1:])
+                with quiet():
+                    result = execute(check_name, check_arguments, hosts=[host])
+                with lock:          
+                    if result[host]:
+                        print "%s: all ok" % rnd
+                    else:
+                        print "%s: failed" % rnd
+            elif action == "wait":
+                # stop and wait until check returns true
+                pass
+            else:
+                taskmgr.handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))    
+
+    time.sleep(1)
 
 # threaded queue manager from http://stackoverflow.com/a/7257510
 class Worker(Thread):
@@ -199,102 +227,162 @@ if __name__ == '__main__':
     if not args.command in config["command"].keys():
         taskmgr.handle_exception("Configuration in '%s' for command '%s' doesn't exist!" % (args.command_config, args.command))
 
-    if not args.cluster_name in config["cluster"].keys():
-        taskmgr.handle_exception("Configuration in '%s' for cluster '%s' doesn't exist!" % (args.cluster_config, args.cluster_name))
+    # iterate on the provided cluster names
+    threadpools = list()
+    for cluster in args.cluster_name:
 
-    # get a threadpool
-    pool = ThreadPool(20)  
+        # check if the cluster definition exists
+        if not cluster in config["cluster"].keys():
+            taskmgr.handle_exception("Configuration in '%s' for cluster '%s' doesn't exist!" % (args.cluster_config, cluster))
 
-    # launch workers
-    for host in args.hosts.split(":"):
-        pool.add_task(taskmgr.worker, host)
+        # check if a hostlist was provided
+        if not args.hosts_file:
+            # not provided, use the hostnames defined in cluster.ini
+            hosts = subprocess.Popen(["/bin/bash", "-c", "echo %s" % config["cluster"][cluster]['hosts']], stdout=subprocess.PIPE).communicate()[0].rstrip().split(" ")
+        else:
+            # get the hosts from the host file which are matching the pattern given for the current cluster in cluster.ini
+            # expand the expression found in cluster.ini using bash - might need to rewrite this in pure python?
+            hosts = list()
+            try:
+                f = open(args.hosts_file)
+                for host in f.readlines():
+                    if re.search("(^\s*$|^#)", host):
+                        continue
+                    if re.search(config["cluster"][cluster]["pattern"], host, re.IGNORECASE):
+                        hosts.append(host.rstrip())
+            except Exception as e: 
+                taskmgr.handle_exception("Problem while reading host file '%s': %s" % (args.hosts_file, str(e)))
+        
+        # get a threadpool 
+        pool = ThreadPool(int(config["cluster"][cluster]["max_parallel"]))
+        threadpools.append(pool)
 
-    # wait until all workers are finished
-    pool.wait_completion()
+        # launch workers
+        for host in hosts:
+            pool.add_task(taskmgr.worker, host, cluster)
+        print "in here"
 
-    ## fixme
-    ## iterate on the hosts within one cluster
-    #threads_queued = list()
-    #threads_running = list()
-    #threads_done = list()
+    # wait until all tasks are done
+    for pool in threadpools:
+        print "Waiting until all threads are finished..."
+        pool.wait_completion()
+        print "OK"
 
-    ##threads_done = 0
+        # get a threadpool
+        #pool2 = ThreadPool(2)
 
-    ## start new threads
-    #max_parallel = 2
-    ##pool_sema = BoundedSemaphore(value=max_parallel)
-
-    ## assign new threads
-    #for host in args.hosts.split(":"):
-    #    t = Thread(target=do_parallel, args=(host,))
-    #    threads_queued.append(t)
-
-    #while len(threads_done) < len(args.hosts.split(":")):
-    #    # start new threads as long we didn't hit max_parallel
-    #    while len(threads_running) < max_parallel:
-    #        t = threads_queued.unshift()
-    #        t.start
-    #        threads_running.append(t)
-
-    #    # wait
-    #    threads_running.shift()
-
-    #    for thread in thread_list.keys():
-    #        pool_sema.acquire()
-    #        print "starting"
-    #        thread_list[thread] = True
-    #        thread.start()
-    #    #pool_sema.release()
-
-
-    #    for thread in thread_list.keys():
-    #        if thread_list[thread] == True:
-    #            print "waiting to join"
-    #            threads_done += 1
-    #            thread.join()
-    #            thread_list.pop(thread, None)
-    #            print "threads done: %d num: %d" % (threads_done, len(args.hosts.split(":")))
+        # launch workers
+        #for host in args.hosts.split(":"):
+        #    pool2.add_task(taskmgr.worker, host, "2")
 
 
-    #    #for thread in thread_list.keys():
-       
- 
-        #pool = Pool(processes=4)
-        #result = pool.apply_async(do_parallel, [])
-        #print result.get(timeout=1)
-        #print pool.map(do_parallel, [host])
+        ## wait until all workers are finished
+        #pool.wait_completion()
+        #pool2.wait_completion()
 
-        ## execute the steps in the command definition file
-        #for command in config["command"][args.command].keys():
-        #    (action, cmd_name) = command.split(" ")
-        #    # pair the check name with the one that is defined in the cluster configuration
-        #    if not cmd_name in config['cluster'][args.cluster_name]:
-        #        taskmgr.handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, args.cluster_name))
-        #    # call the command
-        #    if action == "check":
-        #        # run the check, fail if result is false
-        #        hosts = [ "3capp-webde-dev01", "3capp-webde-dev02" ]
-        #        check_name = config["cluster"][args.cluster_name][cmd_name].split(":")[0]
-        #        check_arguments = ":".join(config["cluster"][args.cluster_name][cmd_name].split(":")[1:])
-        #        result = execute(check_name, check_arguments, hosts=hosts)
-        #        print result
-        #        if result[env.host_string]: 
-        #            print "all ok"
-        #        else:
-        #            print "Failed"
-        #    elif action == "wait":
-        #        # stop and wait until check returns true
-        #        pass
-        #    else:
-        #        taskmgr.handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))
+        # get a threadpool
+        #pool = ThreadPool(4)  
+        #lock = Lock()
 
-        #try:
-        #    print cluster_config[args.cluster_name]["check_host_alive"]
-        #    hosts = [ "3capp-webde-dev01" ]
-        #    result = execute(cluster_config[args.cluster_name]["check_host_alive"], "22", hosts=hosts)
-        #except KeyError:
-        #    taskmgr.handle_exception("Desired cluster '%s' doesn't exist in the cluster configuration file '%s'!" % (args.cluster_name, args.cluster_config))
-        #except Exception as e:
-        #    raise
-        #    #taskmgr.handle_exception(e)
+        # launch workers
+        #for host in args.hosts.split(":"):
+        #    pool.add_task(worker, host, config, args, lock, "1")
+
+        # get a threadpool
+        #pool2 = ThreadPool(4)  
+
+        # launch workers
+        #for host in args.hosts.split(":"):
+        #    pool2.add_task(worker, host, config, args, lock, "2")
+
+
+        # wait until all workers are finished
+        #pool.wait_completion()
+        #pool2.wait_completion()
+
+        ## fixme
+        ## iterate on the hosts within one cluster
+        #threads_queued = list()
+        #threads_running = list()
+        #threads_done = list()
+
+        ##threads_done = 0
+
+        ## start new threads
+        #max_parallel = 2
+        ##pool_sema = BoundedSemaphore(value=max_parallel)
+
+        ## assign new threads
+        #for host in args.hosts.split(":"):
+        #    t = Thread(target=do_parallel, args=(host,))
+        #    threads_queued.append(t)
+
+        #while len(threads_done) < len(args.hosts.split(":")):
+        #    # start new threads as long we didn't hit max_parallel
+        #    while len(threads_running) < max_parallel:
+        #        t = threads_queued.unshift()
+        #        t.start
+        #        threads_running.append(t)
+
+        #    # wait
+        #    threads_running.shift()
+
+        #    for thread in thread_list.keys():
+        #        pool_sema.acquire()
+        #        print "starting"
+        #        thread_list[thread] = True
+        #        thread.start()
+        #    #pool_sema.release()
+
+
+        #    for thread in thread_list.keys():
+        #        if thread_list[thread] == True:
+        #            print "waiting to join"
+        #            threads_done += 1
+        #            thread.join()
+        #            thread_list.pop(thread, None)
+        #            print "threads done: %d num: %d" % (threads_done, len(args.hosts.split(":")))
+
+
+        #    #for thread in thread_list.keys():
+           
+     
+            #pool = Pool(processes=4)
+            #result = pool.apply_async(do_parallel, [])
+            #print result.get(timeout=1)
+            #print pool.map(do_parallel, [host])
+
+            ## execute the steps in the command definition file
+            #for command in config["command"][args.command].keys():
+            #    (action, cmd_name) = command.split(" ")
+            #    # pair the check name with the one that is defined in the cluster configuration
+            #    if not cmd_name in config['cluster'][args.cluster_name]:
+            #        taskmgr.handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, args.cluster_name))
+            #    # call the command
+            #    if action == "check":
+            #        # run the check, fail if result is false
+            #        hosts = [ "3capp-webde-dev01", "3capp-webde-dev02" ]
+            #        check_name = config["cluster"][args.cluster_name][cmd_name].split(":")[0]
+            #        check_arguments = ":".join(config["cluster"][args.cluster_name][cmd_name].split(":")[1:])
+            #        result = execute(check_name, check_arguments, hosts=hosts)
+            #        print result
+            #        if result[env.host_string]: 
+            #            print "all ok"
+            #        else:
+            #            print "Failed"
+            #    elif action == "wait":
+            #        # stop and wait until check returns true
+            #        pass
+            #    else:
+            #        taskmgr.handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))
+
+            #try:
+            #    print cluster_config[args.cluster_name]["check_host_alive"]
+            #    hosts = [ "3capp-webde-dev01" ]
+            #    result = execute(cluster_config[args.cluster_name]["check_host_alive"], "22", hosts=hosts)
+            #except KeyError:
+            #    taskmgr.handle_exception("Desired cluster '%s' doesn't exist in the cluster configuration file '%s'!" % (args.cluster_name, args.cluster_config))
+            #except Exception as e:
+            #    raise
+            #    #taskmgr.handle_exception(e)
 
