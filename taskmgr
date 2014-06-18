@@ -324,31 +324,44 @@ def run_check_tasks(host, cluster, cmd_segments, multiple):
     else:
         return any(res == True for res in results)
 
-#def run_wait_tasks(host, cluster, cmd_segments, multiple):
-#    global l
-#    global timeout
-#    global command_timeout
-#                with quiet():
-#                    try:
-#                        log_info("Waiting until check '%s' returns..." % check_name, host, cluster)
-#                        while True:
-#                            # multiple: true 
-#                            #   need to wait for all of them to return OK
-#                            # multiple: false
-#                            #   one is enough                           
-#                            result = execute(check_name, check_arguments, hosts=[host])
-#                            if result[host] == True:
-#                                if multiple:
-#                                    return True
-#                                else:
-#                                    break
-#                            else:
-#                                log_debug("Waiting before retrying", host, cluster)
-#                                time.sleep(5)
-#                                log_debug("Trying again", host, cluster)
-#                        log_info("Got response, moving on", host, cluster)
-#                    except Exception as e:
-#                        handle_exception("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
+def run_wait_tasks(host, cluster, cmd_segments, multiple):
+    global l
+    global timeout
+    global command_timeout
+    results = list()
+    for cmd in cmd_segments:
+        check_name = cmd.split(":")[0]
+        check_arguments = ":".join(cmd.split(":")[1:])
+        log_debug("Waiting until check '%s %s' returns..." % (check_name, check_arguments), host, cluster)
+        while True:
+            # this loop is needed to ensure we wait until the check is finally ok
+            try:
+                log_debug("Executing wait '%s %s'" % (check_name, check_arguments), host, cluster)
+                with quiet():             
+                    result = execute(check_name, check_arguments, hosts=[host])
+            except Exception as e:
+                handle_exception("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
+            if result[host] == True:
+                # break out of while True
+                log_debug("Got response, moving on", host, cluster)
+                break
+            else:
+                # failed, have to wait longer
+                log_debug("Waiting before retrying", host, cluster)
+                time.sleep(5)
+                continue
+        # we are here, so there was a successful result
+        if multiple == False:
+            # we can return at this point
+            return True
+        else:
+            results.append(True)
+        if not len(results) < len(cmd_segments):
+            break
+    # if we are here:
+    #   * multiple is true
+    #   * all waits have finished with success, no need to evaluate results
+    return True
 
 
 # due to a possible bug in the signal handling of multiprocessing's Pool implementation
@@ -450,7 +463,6 @@ if __name__ == '__main__':
         handle_exception("Configuration in '%s' for command '%s' doesn't exist!" % (args.command_config, args.command))
 
     # iterate on the provided cluster names
-    
     for cluster in args.cluster_name:
 
         # check if the cluster definition exists
@@ -498,10 +510,8 @@ if __name__ == '__main__':
             async_worker.finish()
             async_worker.close_queues()
         sys.exit(1)
-    #finally:
 
     # print final statistics 
-
     results = dict()
     log_info("=" * 80)
     log_info("Statistics: ")
@@ -531,37 +541,4 @@ if __name__ == '__main__':
         log_info("All was OK!")
         sys.exit(0)
 
-    ## execute the steps in the command definition file
-    #for command in config["command"][args.command].keys():
-    #    (action, cmd_name) = command.split(" ")
-    #    # pair the check name with the one that is defined in the cluster configuration
-    #    if not cmd_name in config['cluster'][args.cluster_name]:
-    #        taskmgr.handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, args.cluster_name))
-    #    # call the command
-    #    if action == "check":
-    #        # run the check, fail if result is false
-    #        hosts = [ "3capp-webde-dev01", "3capp-webde-dev02" ]
-    #        check_name = config["cluster"][args.cluster_name][cmd_name].split(":")[0]
-    #        check_arguments = ":".join(config["cluster"][args.cluster_name][cmd_name].split(":")[1:])
-    #        result = execute(check_name, check_arguments, hosts=hosts)
-    #        print result
-    #        if result[env.host_string]: 
-    #            print "all ok"
-    #        else:
-    #            print "Failed"
-    #    elif action == "wait":
-    #        # stop and wait until check returns true
-    #        pass
-    #    else:
-    #        handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))
-
-    #try:
-    #    print cluster_config[args.cluster_name]["check_host_alive"]
-    #    hosts = [ "3capp-webde-dev01" ]
-    #    result = execute(cluster_config[args.cluster_name]["check_host_alive"], "22", hosts=hosts)
-    #except KeyError:
-    #    handle_exception("Desired cluster '%s' doesn't exist in the cluster configuration file '%s'!" % (args.cluster_name, args.cluster_config))
-    #except Exception as e:
-    #    raise
-    #    #handle_exception(e)
 
