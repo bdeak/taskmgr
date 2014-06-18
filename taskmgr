@@ -12,6 +12,7 @@ import time
 import subprocess
 import re
 import signal
+
 from random import randint
 
 import multiprocessing
@@ -146,6 +147,11 @@ def log_warning(msg, *args, **kwargs):
     args, kwargs = extend_logger_information(*args, **kwargs)
     l.warning(msg, *args, **kwargs)
 
+def log_error(msg, *args, **kwargs):
+    global l
+    args, kwargs = extend_logger_information(*args, **kwargs)
+    l.error(msg, *args, **kwargs)
+
 def log_critical(msg, *args, **kwargs):
     global l
     args, kwargs = extend_logger_information(*args, **kwargs)
@@ -208,6 +214,10 @@ def exit_if_fatal(fatal=True):
 
 
 def worker(host, cluster, config, args):
+    """ The worker function. This is the code that gets executed for each cluster/node combination.
+        The final result will represent the success or the failure of the given command on the given machine
+        In case of a problem an exception is raised.
+    """
     global l
     global timeout
     global command_timeout
@@ -237,7 +247,7 @@ def worker(host, cluster, config, args):
         cmd_segments = config["cluster"][cluster][cmd_name].split(" ")
         # check if all|any is at the end, if yes, remove it
 
-        if if cmd_segments[-1].lower() == "any" or if cmd_segments[-1].lower() == "all":
+        if cmd_segments[-1].lower() == "any" or cmd_segments[-1].lower() == "all":
             if cmd_segments[-1].lower() == "any":
                 multiple = False
             elif cmd_segments[-1].lower() == "all":
@@ -245,64 +255,101 @@ def worker(host, cluster, config, args):
             # remove it
             cmd_segments.pop(-1)
         else:
-            multiple = False
+            multiple = True
 
         # call the commands
+        # rule of thumb: on any failed check we return with false, meaning that the command failed
         # iterate on the segments, process them one by one
-        for cmd in cmd_segments:
-            check_name = cmd.split(":")[0]
-            check_arguments = ":".join(cmd.split(":")[1:])
-            if action == "check":
-                with quiet():
-                    try: 
-                        result = execute(check_name, check_arguments, hosts=[host])
-                    except Exception as e:
-                        handle_exception("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
-
-                # got the result, good
-                # if multiple is True, 
-                if multiple:
-                    if result[host]:
-                        continue
-                    else:
-                        return False
-                else:
-                    if result[host]:
-                        return True
-                    else:
-                        continue
-            elif action == "wait":
-                # stop and wait until check returns true
-                #check_name = config["cluster"][cluster][cmd_name].split(":")[0]
-                #check_arguments = ":".join(config["cluster"][cluster][cmd_name].split(":")[1:])
-                with quiet():
-                    try:
-                        log_info("Waiting until check '%s' returns..." % check_name, host, cluster)
-                        while True:
-                            # multiple: true 
-                            #   need to wait for all of them to return OK
-                            # multiple: false
-                            #   one is enough                           
-                            result = execute(check_name, check_arguments, hosts=[host])
-                            if result[host] == True:
-                                if multiple:
-                                    return True
-                                else:
-                                    break
-                            else:
-                                log_debug("Waiting before retrying", host, cluster)
-                                time.sleep(5)
-                                log_debug("Trying again", host, cluster)
-                        log_info("Got response, moving on", host, cluster)
-                    except Exception as e:
-                        handle_exception("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
+        if action == "check":
+            result = run_check_tasks(host, cluster, cmd_segments, multiple)
+            if not result:
+                log_error("%s '%s' failed" % (action, cmd_name), host, cluster)
+                return (host, cluster, False)
+            else:
+                log_info("%s '%s' OK" % (action, cmd_name), host, cluster)
+        
+        elif action == "wait":
+            # stop and wait until check returns true
+            result = run_wait_tasks(host, cluster, cmd_segments, multiple)
+            if not result:
+                log_error("%s '%s' failed" % (action, cmd_name), host, cluster)
+                return (host, cluster, False)
+            else:
+                log_info("%s '%s' OK" % (action, cmd_name), host, cluster)
 
         else:
             handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))    
 
     # fixme: remove this!
     #time.sleep(randint(2,9))
-    return (host, cluster)
+    return (host, cluster, True)
+
+def run_check_tasks(host, cluster, cmd_segments, multiple):
+    """ A helper task called from worker() to execute a check task
+        This is needed so that multiple checks can be evaluated with a log_critical
+        AND condition
+    """
+    global l
+    global timeout
+    global command_timeout
+    results = list()
+    for cmd in cmd_segments:
+        check_name = cmd.split(":")[0]
+        check_arguments = ":".join(cmd.split(":")[1:])
+        
+        try: 
+            with quiet():
+                result = execute(check_name, check_arguments, hosts=[host])
+        except Exception as e:
+            handle_exception("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
+
+        # got the result, good
+        if multiple:
+            if result[host]:
+                results.append(result[host])
+                continue
+            else:
+                return False
+        else:
+            if result[host]:
+                return True
+            else:
+                continue
+                results.append(result[host])
+    # if we are here all of the checks have been run
+    # either because multiple is True, or because multiple is False, but
+    # the first checks failed
+    if multiple:
+        return all(res == True for res in results)
+    else:
+        return any(res == True for res in results)
+
+#def run_wait_tasks(host, cluster, cmd_segments, multiple):
+#    global l
+#    global timeout
+#    global command_timeout
+#                with quiet():
+#                    try:
+#                        log_info("Waiting until check '%s' returns..." % check_name, host, cluster)
+#                        while True:
+#                            # multiple: true 
+#                            #   need to wait for all of them to return OK
+#                            # multiple: false
+#                            #   one is enough                           
+#                            result = execute(check_name, check_arguments, hosts=[host])
+#                            if result[host] == True:
+#                                if multiple:
+#                                    return True
+#                                else:
+#                                    break
+#                            else:
+#                                log_debug("Waiting before retrying", host, cluster)
+#                                time.sleep(5)
+#                                log_debug("Trying again", host, cluster)
+#                        log_info("Got response, moving on", host, cluster)
+#                    except Exception as e:
+#                        handle_exception("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
+
 
 # due to a possible bug in the signal handling of multiprocessing's Pool implementation
 # we need our own pool management
@@ -452,13 +499,37 @@ if __name__ == '__main__':
             async_worker.close_queues()
         sys.exit(1)
     #finally:
-    #    for async_worker in taskmgr.get_worker_pools():
-    #        while not async_worker.result_queue_empty():
-    #            print async_worker.result_queue_get(block=False)
-            
 
-    print "OK"
-    sys.exit(0)
+    # print final statistics 
+
+    results = dict()
+    log_info("=" * 80)
+    log_info("Statistics: ")
+    for async_worker in taskmgr.get_worker_pools():
+        while not async_worker.result_queue_empty():
+            host, cluster, result = async_worker.result_queue_get(block=True)
+            if not cluster in results:
+                results[cluster] = dict()
+            results[cluster][host] = result
+    results_flat = [host for cluster in results.itervalues() for host in cluster.itervalues()]
+    results_ok = [i for i in results_flat if i == True]
+    results_failed = [i for i in results_flat if i == False]
+
+    log_info('Total: %d' % len(results_flat))
+    log_info('OK: %d/%0.2f%% |  Failed: %d/%0.2f%%' % (len(results_ok), len(results_ok)/len(results_flat)*100, len(results_failed), len(results_failed)/len(results_flat)*100))
+    if len(results_failed):
+        log_info("")
+        log_info("-" * 60)
+        log_info("Failed hosts:")
+        for cluster in sorted(results.keys()):
+            for host in results[cluster].keys():
+                if results[cluster][host] == False:
+                    log_info("%s / %s" % (cluster, host))
+        sys.exit(1)
+    else:
+        log_info("")
+        log_info("All was OK!")
+        sys.exit(0)
 
     ## execute the steps in the command definition file
     #for command in config["command"][args.command].keys():
