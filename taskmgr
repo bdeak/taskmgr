@@ -1,7 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
-from fabric import main as fabricmain
+
+# needed to properly import tasks, and to access internal fabric functionality
+from fabric import main as fabricmain 
 from fabric.api import *
+
 import argparse
 import logging
 import configparser
@@ -12,8 +15,6 @@ import time
 import subprocess
 import re
 import signal
-
-from random import randint
 
 import multiprocessing
 import Queue
@@ -28,6 +29,9 @@ class ParseException(Exception):
     pass
 
 class TaskRunException(Exception):
+    pass
+
+class NoSuchTaskException(Exception):
     pass
 
 class TaskMgr(object):
@@ -190,28 +194,74 @@ def extend_logger_information(*args, **kwargs):
     # return the modified arguments
     return newargs, kwargs
 
-def handle_exception(exception, fatal=True):
+def handle_exception(exception, *args, **kwargs):
     global l
-    if type(exception) == OperationException:
-        log_critical(e)
-        exit_if_fatal(fatal)
-
-    elif type(exception) == str:
-        log_critical(exception)
-        exit_if_fatal(fatal)
-
-    elif type(exception) == unicode:
-        log_critical(exception)
-        exit_if_fatal(fatal)
-
+    global pid
+    if "fatal" in kwargs.keys():
+        fatal = kwargs["fatal"]
     else:
-        log_critical("Unknown exception type: %s" % type(exception))
+        fatal = True
+    
+    log_critical(exception, *args)
+    
+    if os.getpid() == pid:
+        # this is the parent process, do cleanup
+        if fatal:
+            exit_handler(1)
+    else:
+        # child process
         exit_if_fatal(fatal)
 
 def exit_if_fatal(fatal=True):
     if fatal:
         sys.exit(1)
 
+def exit_handler(exit_code=None):
+    global taskmgr
+    for async_worker in taskmgr.get_worker_pools():
+        # finish processing jobs, close queues
+        async_worker.finish()
+        async_worker.close_queues()
+
+    if exit_code is None or exit_code == 0:
+        results_flat, results_ok, results_failed = print_statistics()
+        
+        if exit_code is None:
+            if len(results_failed):
+                exit_code = 1
+            else:
+                exit_code = 0
+                log_info("")
+                log_info("All was OK!")
+    sys.exit(exit_code)
+
+def print_statistics():
+    global taskmgr
+    results = dict()
+    for async_worker in taskmgr.get_worker_pools():
+        while not async_worker.result_queue_empty():
+            host, cluster, result = async_worker.result_queue_get(block=True)
+            if not cluster in results:
+                results[cluster] = dict()
+            results[cluster][host] = result
+    results_flat = [host for cluster in results.itervalues() for host in cluster.itervalues()]
+    results_ok = [i for i in results_flat if i == True]
+    results_failed = [i for i in results_flat if i == False]
+
+    if len(results_flat) > 0:
+        log_info("=" * 80)
+        log_info("Statistics: ")
+        log_info('Total: %d' % len(results_flat))
+        log_info('OK: %d/%0.2f%% |  Failed: %d/%0.2f%%' % (len(results_ok), len(results_ok)/len(results_flat)*100, len(results_failed), len(results_failed)/len(results_flat)*100))
+        if len(results_failed):
+            log_info("")
+            log_info("-" * 60)
+            log_info("Failed hosts:")
+            for cluster in sorted(results.keys()):
+                for host in results[cluster].keys():
+                    if results[cluster][host] == False:
+                        log_info("%s / %s" % (cluster, host))
+    return (results_flat, results_ok, results_failed)
 
 def worker(host, cluster, config, args):
     """ The worker function. This is the code that gets executed for each cluster/node combination.
@@ -239,7 +289,7 @@ def worker(host, cluster, config, args):
         (action, cmd_name) = command.split(" ")
         # pair the check name with the one that is defined in the cluster configuration
         if not cmd_name in config['cluster'][cluster]:
-            handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, cluster))
+            handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, cluster), host, cluster)
         # run the check, fail if result is false
         # remove all|any form the end
 
@@ -261,7 +311,10 @@ def worker(host, cluster, config, args):
         # rule of thumb: on any failed check we return with false, meaning that the command failed
         # iterate on the segments, process them one by one
         if action == "check":
-            result = run_check_tasks(host, cluster, cmd_segments, multiple)
+            try:
+                result = run_check_tasks(host, cluster, cmd_segments, multiple)
+            except Exception as e:
+                handle_exception(e, host, cluster)
             if not result:
                 log_error("%s '%s' failed" % (action, cmd_name), host, cluster)
                 return (host, cluster, False)
@@ -270,7 +323,10 @@ def worker(host, cluster, config, args):
         
         elif action == "wait":
             # stop and wait until check returns true
-            result = run_wait_tasks(host, cluster, cmd_segments, multiple)
+            try:
+                result = run_wait_tasks(host, cluster, cmd_segments, multiple)
+            except Exception as e:
+                handle_exception(e, host, cluster)
             if not result:
                 log_error("%s '%s' failed" % (action, cmd_name), host, cluster)
                 return (host, cluster, False)
@@ -278,7 +334,7 @@ def worker(host, cluster, config, args):
                 log_info("%s '%s' OK" % (action, cmd_name), host, cluster)
 
         else:
-            handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))    
+            handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config), host, cluster)    
 
     # fixme: remove this!
     #time.sleep(randint(2,9))
@@ -292,16 +348,20 @@ def run_check_tasks(host, cluster, cmd_segments, multiple):
     global l
     global timeout
     global command_timeout
+    global callables
     results = list()
     for cmd in cmd_segments:
         check_name = cmd.split(":")[0]
         check_arguments = ":".join(cmd.split(":")[1:])
-        
+        if not check_name in fabricmain._task_names(callables):
+            raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % check_name)
+
         try: 
+            log_debug("Executing check '%s %s'" % (check_name, check_arguments), host, cluster)
             with quiet():
                 result = execute(check_name, check_arguments, hosts=[host])
         except Exception as e:
-            handle_exception("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
+            raise TaskRunException("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
 
         # got the result, good
         if multiple:
@@ -328,10 +388,15 @@ def run_wait_tasks(host, cluster, cmd_segments, multiple):
     global l
     global timeout
     global command_timeout
+    global callables
     results = list()
     for cmd in cmd_segments:
         check_name = cmd.split(":")[0]
         check_arguments = ":".join(cmd.split(":")[1:])
+        # check if a given fabric task exists
+        if not check_name in fabricmain._task_names(callables):
+            raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % check_name)
+
         log_debug("Waiting until check '%s %s' returns..." % (check_name, check_arguments), host, cluster)
         while True:
             # this loop is needed to ensure we wait until the check is finally ok
@@ -340,7 +405,7 @@ def run_wait_tasks(host, cluster, cmd_segments, multiple):
                 with quiet():             
                     result = execute(check_name, check_arguments, hosts=[host])
             except Exception as e:
-                handle_exception("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
+                raise TaskRunException("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
             if result[host] == True:
                 # break out of while True
                 log_debug("Got response, moving on", host, cluster)
@@ -362,7 +427,6 @@ def run_wait_tasks(host, cluster, cmd_segments, multiple):
     #   * multiple is true
     #   * all waits have finished with success, no need to evaluate results
     return True
-
 
 # due to a possible bug in the signal handling of multiprocessing's Pool implementation
 # we need our own pool management
@@ -417,9 +481,11 @@ class AsyncWorker:
 
 # global variable holding logger object
 l = object
+taskmgr = object
 # timeouts to use
 timeout = 10
 command_timeout = None
+pid = os.getpid()
 
 # load available fabric task files 
 # http://stackoverflow.com/questions/23605418/in-fabric-how-can-i-execute-tasks-from-another-python-file
@@ -505,40 +571,55 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         print "Received Ctrl + C, exiting..."
         # don't wait, just close queues
-        for async_worker in taskmgr.get_worker_pools():
-            # finish processing jobs, close queues
-            async_worker.finish()
-            async_worker.close_queues()
-        sys.exit(1)
+        exit_handler(1)
+        #for async_worker in taskmgr.get_worker_pools():
+        #    # finish processing jobs, close queues
+        #    async_worker.finish()
+        #    async_worker.close_queues()
+        #sys.exit(1)
 
-    # print final statistics 
-    results = dict()
-    log_info("=" * 80)
-    log_info("Statistics: ")
-    for async_worker in taskmgr.get_worker_pools():
-        while not async_worker.result_queue_empty():
-            host, cluster, result = async_worker.result_queue_get(block=True)
-            if not cluster in results:
-                results[cluster] = dict()
-            results[cluster][host] = result
-    results_flat = [host for cluster in results.itervalues() for host in cluster.itervalues()]
-    results_ok = [i for i in results_flat if i == True]
-    results_failed = [i for i in results_flat if i == False]
-
-    log_info('Total: %d' % len(results_flat))
-    log_info('OK: %d/%0.2f%% |  Failed: %d/%0.2f%%' % (len(results_ok), len(results_ok)/len(results_flat)*100, len(results_failed), len(results_failed)/len(results_flat)*100))
-    if len(results_failed):
-        log_info("")
-        log_info("-" * 60)
-        log_info("Failed hosts:")
-        for cluster in sorted(results.keys()):
-            for host in results[cluster].keys():
-                if results[cluster][host] == False:
-                    log_info("%s / %s" % (cluster, host))
-        sys.exit(1)
-    else:
+    results_flat, results_ok, results_failed = print_statistics()
+    if len(results_flat) and not len(results_failed):
+        exit_code = 0
         log_info("")
         log_info("All was OK!")
-        sys.exit(0)
+    else:
+        exit_code = 1
+    sys.exit(exit_code)
+    # print final statistics 
+    #results = dict()
+    #log_info("=" * 80)
+    #log_info("Statistics: ")
+    #for async_worker in taskmgr.get_worker_pools():
+    #    while not async_worker.result_queue_empty():
+    #        host, cluster, result = async_worker.result_queue_get(block=True)
+    #        if not cluster in results:
+    #            results[cluster] = dict()
+    #        results[cluster][host] = result
+    #print results
+    #results_flat = [host for cluster in results.itervalues() for host in cluster.itervalues()]
+    #results_ok = [i for i in results_flat if i == True]
+    #results_failed = [i for i in results_flat if i == False]
+#
+    #log_info('Total: %d' % len(results_flat))
+    #log_info('OK: %d/%0.2f%% |  Failed: %d/%0.2f%%' % (len(results_ok), len(results_ok)/len(results_flat)*100, len(results_failed), len(results_failed)/len(results_flat)*100))
+    #if len(results_failed):
+    #    log_info("")
+    #    log_info("-" * 60)
+    #    log_info("Failed hosts:")
+    #    for cluster in sorted(results.keys()):
+    #        for host in results[cluster].keys():
+    #            if results[cluster][host] == False:
+    #                log_info("%s / %s" % (cluster, host))
+    #    sys.exit(1)
+    #else:
+    #    log_info("")
+    #    log_info("All was OK!")
+    #    sys.exit(0)
+
+    # todo:
+    # child to signal parent if exception to stop feeding new jobs
+    # statistics not realistic when check name doesn't exist and check fails because of this
+    # review exit_handler and print statistic
 
 
