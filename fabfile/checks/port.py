@@ -7,30 +7,17 @@ import re
 def check(input_params):
     """ Check if a given TCP port is open
         input_params parameter is a string, with the following fields:
-        port1,port2,portN:tcp|udp:multiple=true|false
+        port:tcp|udp
     """
     # split up the input_params, and make sense of it
-    if not re.search("^([0-9]+,?)+:(tcp|udp)(:(true|false))?$", input_params):
+    if not re.search("^([0-9]+):(tcp|udp)$", input_params):
         raise AttributeError("The given input_params '%s' doesn't match the requirements!" % input_params)
-    port = input_params.split(":")[0].split(",")
-    # convert strings to integers
-    port = [ int(x) for x in port ]
-    protocol = input_params.split(":")[1]
     try:
-        need_all = str2bool(input_params.split(":")[2])
-    except IndexError:
-        need_all = True
-
-    for element in port:
-        if not type(element) is int:
-            raise ValueError("Array input was provided but not all elements are ints!")
-    results = list()
-    for p in port:
-        results.append(check_port(env.host_string, p, protocol))
-    if need_all:
-        return all(res == True for res in results)
-    else:
-        return any(res == True for res in results)
+        port = int(input_params.split(":")[0])
+    except Exception as e:
+        raise ValueError("Can't convert port to integer: %s" % str(e))
+    protocol = input_params.split(":")[1]
+    return check_port(env.host_string, port, protocol)
 
 def check_port(host, port, protocol):
     """ Do the actual port check, internal function, not exposed via @task """
@@ -40,10 +27,8 @@ def check_port(host, port, protocol):
         result = sock.connect_ex((host, port))
         sock.close()
         if result == 0:
-            #puts("port is open")
             return True
         else:
-            #puts("port is closed")
             return False
     elif protocol == "udp":
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
