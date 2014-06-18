@@ -10,9 +10,8 @@ def check(input_params):
         port1,port2,portN:tcp|udp:multiple=true|false
     """
     # split up the input_params, and make sense of it
-    #print "input params are: %s" % input_params
     if not re.search("^([0-9]+,?)+:(tcp|udp)(:(true|false))?$", input_params):
-        raise AttributeError("The given input_params doesn't match the requirements!")
+        raise AttributeError("The given input_params '%s' doesn't match the requirements!" % input_params)
     port = input_params.split(":")[0].split(",")
     # convert strings to integers
     port = [ int(x) for x in port ]
@@ -33,11 +32,11 @@ def check(input_params):
     else:
         return any(res == True for res in results)
 
-def check_port(host, port, protocol, timeout=5):
+def check_port(host, port, protocol):
     """ Do the actual port check, internal function, not exposed via @task """
     if protocol == "tcp":
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
+        sock.settimeout(int(env.timeout))
         result = sock.connect_ex((host, port))
         sock.close()
         if result == 0:
@@ -48,7 +47,7 @@ def check_port(host, port, protocol, timeout=5):
             return False
     elif protocol == "udp":
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(5)
+        sock.settimeout(int(env.timeout))
         result = sock.connect_ex((host, port))
         sock.close()
         if result == 0:

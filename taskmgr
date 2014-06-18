@@ -23,6 +23,9 @@ __version__ = "0.0.1"
 class OperationException(Exception):
     pass
 
+class ParseException(Exception):
+    pass
+
 class TaskRunException(Exception):
     pass
 
@@ -206,10 +209,20 @@ def exit_if_fatal(fatal=True):
 
 def worker(host, cluster, config, args):
     global l
+    global timeout
+    global command_timeout
+
+    # set timeout values for facter
+    env.timeout = timeout
+    env.command_timeout = command_timeout
+
     # ignore ctrl c here
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     # create a lock object if it doesn't exist
     #print "starting inside on %s" % host
+
+    # command1: segment1 segment2 segment3
+    # command2: segment1 segment2 segment3
     for command in config["command"][args.command].keys():
         #print "command is", command
         #print "running check %s for cluster %s" % (check_name, cluster)
@@ -217,38 +230,72 @@ def worker(host, cluster, config, args):
         # pair the check name with the one that is defined in the cluster configuration
         if not cmd_name in config['cluster'][cluster]:
             handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, cluster))
-        # call the command
-        if action == "check":
-            # run the check, fail if result is false
-            check_name = config["cluster"][cluster][cmd_name].split(":")[0]
-            check_arguments = ":".join(config["cluster"][cluster][cmd_name].split(":")[1:])
-            with quiet():
-                try: 
-                    result = execute(check_name, check_arguments, hosts=[host])
-                except Exception as e:
-                    handle_exception("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
+        # run the check, fail if result is false
+        # remove all|any form the end
 
-            #with lock:
-            if result[host]:
-                print "%s: all ok" % cluster
-            else:
-                print "%s: failed" % cluster
-        elif action == "wait":
-            # stop and wait until check returns true
-            check_name = config["cluster"][cluster][cmd_name].split(":")[0]
-            check_arguments = ":".join(config["cluster"][cluster][cmd_name].split(":")[1:])
-            with quiet():
-                try:
-                    log_info("Starting wait", host, cluster)
-                    while True:
+        # split the command on spaces
+        cmd_segments = config["cluster"][cluster][cmd_name].split(" ")
+        # check if all|any is at the end, if yes, remove it
+
+        if if cmd_segments[-1].lower() == "any" or if cmd_segments[-1].lower() == "all":
+            if cmd_segments[-1].lower() == "any":
+                multiple = False
+            elif cmd_segments[-1].lower() == "all":
+                multiple = True
+            # remove it
+            cmd_segments.pop(-1)
+        else:
+            multiple = False
+
+        # call the commands
+        # iterate on the segments, process them one by one
+        for cmd in cmd_segments:
+            check_name = cmd.split(":")[0]
+            check_arguments = ":".join(cmd.split(":")[1:])
+            if action == "check":
+                with quiet():
+                    try: 
                         result = execute(check_name, check_arguments, hosts=[host])
-                        if result[host] == True:
-                            break
-                        else:
-                            time.sleep(1)
-                    log_info("wait done", host, cluster)
-                except Exception as e:
-                    handle_exception("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
+                    except Exception as e:
+                        handle_exception("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
+
+                # got the result, good
+                # if multiple is True, 
+                if multiple:
+                    if result[host]:
+                        continue
+                    else:
+                        return False
+                else:
+                    if result[host]:
+                        return True
+                    else:
+                        continue
+            elif action == "wait":
+                # stop and wait until check returns true
+                #check_name = config["cluster"][cluster][cmd_name].split(":")[0]
+                #check_arguments = ":".join(config["cluster"][cluster][cmd_name].split(":")[1:])
+                with quiet():
+                    try:
+                        log_info("Waiting until check '%s' returns..." % check_name, host, cluster)
+                        while True:
+                            # multiple: true 
+                            #   need to wait for all of them to return OK
+                            # multiple: false
+                            #   one is enough                           
+                            result = execute(check_name, check_arguments, hosts=[host])
+                            if result[host] == True:
+                                if multiple:
+                                    return True
+                                else:
+                                    break
+                            else:
+                                log_debug("Waiting before retrying", host, cluster)
+                                time.sleep(5)
+                                log_debug("Trying again", host, cluster)
+                        log_info("Got response, moving on", host, cluster)
+                    except Exception as e:
+                        handle_exception("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
 
         else:
             handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))    
@@ -310,6 +357,9 @@ class AsyncWorker:
 
 # global variable holding logger object
 l = object
+# timeouts to use
+timeout = 10
+command_timeout = None
 
 # load available fabric task files 
 # http://stackoverflow.com/questions/23605418/in-fabric-how-can-i-execute-tasks-from-another-python-file
@@ -391,9 +441,13 @@ if __name__ == '__main__':
     try:
         for async_worker in taskmgr.get_worker_pools():
             async_worker.wait()
+            # close all queues
+            async_worker.close_queues()            
     except KeyboardInterrupt:
         print "Received Ctrl + C, exiting..."
+        # don't wait, just close queues
         for async_worker in taskmgr.get_worker_pools():
+            # finish processing jobs, close queues
             async_worker.finish()
             async_worker.close_queues()
         sys.exit(1)
@@ -404,6 +458,7 @@ if __name__ == '__main__':
             
 
     print "OK"
+    sys.exit(0)
 
     ## execute the steps in the command definition file
     #for command in config["command"][args.command].keys():
