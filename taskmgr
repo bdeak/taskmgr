@@ -23,6 +23,9 @@ __version__ = "0.0.1"
 class OperationException(Exception):
     pass
 
+class TaskRunException(Exception):
+    pass
+
 class TaskMgr(object):
 
     def __init__(self):
@@ -31,36 +34,9 @@ class TaskMgr(object):
         self.config = dict()
         self.lock = None
         self.worker_pools = list()
-        # initialize logger
-        try:
-            self.l = self.initialize_logger(None, self.args.debug)
-        except Exception as e:
-            print "Can't initialize logger!"
-            sys.exit(1)
 
     def get_arguments(self):
         return self.args
-
-    def get_logger(self):
-        return self.l
-
-    def initialize_logger(self, logfile, debug, logformat='%(asctime)s - %(levelname)s - %(message)s'):
-        """ initialize logging - console """
-        if debug:
-            loglevel = logging.DEBUG
-        else:
-            loglevel = logging.INFO
-
-        l = logging.getLogger()
-        l.setLevel(loglevel)
-
-        ch = logging.StreamHandler(sys.stdout)
-        ch.setLevel(loglevel)
-        formatter = logging.Formatter(logformat)
-        ch.setFormatter(formatter)
-        l.addHandler(ch)
-
-        return l
 
     def read_configuration(self, configfile, ctype, allow_no_value=False):
         config = configparser.ConfigParser(allow_no_value=allow_no_value)
@@ -74,24 +50,6 @@ class TaskMgr(object):
     def get_configuration(self, ctype):
         return self.config[ctype]
     
-    def handle_exception(self, exception, fatal=True):
-        if type(exception) == OperationException:
-            self.l.critical(e)
-            self._exit_if_fatal(fatal)
-
-        if type(exception) == str:
-            self.l.critical(exception)
-            self._exit_if_fatal(fatal)
-
-        else:
-            self.l.critical("Unknown exception type: %s" % type(exception))
-            self._exit_if_fatal(fatal)
-
-
-    def _exit_if_fatal(self, fatal=True):
-        if fatal:
-            sys.exit(1)
-
     def parse_cli_args(self):
         # parse command line arguments
         parser = argparse.ArgumentParser()
@@ -144,7 +102,50 @@ class TaskMgr(object):
     def get_worker_pools(self):
         return self.worker_pools
 
+
+def initialize_logger(logfile, debug, logformat='%(asctime)s - %(levelname)s - %(message)s'):
+    """ initialize logging - console """
+    if debug:
+        loglevel = logging.DEBUG
+    else:
+        loglevel = logging.INFO
+
+    l = logging.getLogger()
+    l.setLevel(loglevel)
+
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(loglevel)
+    formatter = logging.Formatter(logformat)
+    ch.setFormatter(formatter)
+    l.addHandler(ch)
+
+    return l
+
+def handle_exception(exception, fatal=True):
+    global l
+    if type(exception) == OperationException:
+        l.critical(e)
+        exit_if_fatal(fatal)
+
+    elif type(exception) == str:
+        l.critical(exception)
+        exit_if_fatal(fatal)
+
+    elif type(exception) == unicode:
+        l.critical(exception)
+        exit_if_fatal(fatal)
+
+    else:
+        l.critical("Unknown exception type: %s" % type(exception))
+        exit_if_fatal(fatal)
+
+def exit_if_fatal(fatal=True):
+    if fatal:
+        sys.exit(1)
+
+
 def worker(host, cluster, config, args):
+    global l
     # ignore ctrl c here
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     # create a lock object if it doesn't exist
@@ -155,14 +156,18 @@ def worker(host, cluster, config, args):
         (action, cmd_name) = command.split(" ")
         # pair the check name with the one that is defined in the cluster configuration
         if not cmd_name in config['cluster'][cluster]:
-            taskmgr.handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, cluster))
+            handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, cluster))
         # call the command
         if action == "check":
             # run the check, fail if result is false
             check_name = config["cluster"][cluster][cmd_name].split(":")[0]
             check_arguments = ":".join(config["cluster"][cluster][cmd_name].split(":")[1:])
             with quiet():
-                result = execute(check_name, check_arguments, hosts=[host])
+                try: 
+                    result = execute(check_name, check_arguments, hosts=[host])
+                except Exception as e:
+                    handle_exception("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
+
             #with lock:
             if result[host]:
                 print "%s: all ok" % cluster
@@ -172,7 +177,7 @@ def worker(host, cluster, config, args):
             # stop and wait until check returns true
             pass
         else:
-            taskmgr.handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))    
+            handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))    
 
     # fixme: remove this!
     #time.sleep(randint(2,9))
@@ -229,23 +234,34 @@ class AsyncWorker:
         self.job_queue.close()
 ###################################################################################3
 
-if __name__ == '__main__':
+# global variable holding logger object
+l = object
 
-    # load available fabric task files 
-    # http://stackoverflow.com/questions/23605418/in-fabric-how-can-i-execute-tasks-from-another-python-file
-    docstring, callables, default = fabricmain.load_fabfile('fabfile')
-    fabricmain.state.commands.update(callables)
+# load available fabric task files 
+# http://stackoverflow.com/questions/23605418/in-fabric-how-can-i-execute-tasks-from-another-python-file
+docstring, callables, default = fabricmain.load_fabfile('fabfile')
+fabricmain.state.commands.update(callables)
+
+if __name__ == '__main__':
 
     config = dict()
 
     # create taskmanager object
     taskmgr = TaskMgr()
     args = taskmgr.get_arguments()
+
+    # initialize logger
+    try:
+        l = initialize_logger(None, args.debug)
+    except Exception as e:
+        print "Can't initialize logger!"
+        sys.exit(1)
+
     # parse the cluster configuration
     try:
         taskmgr.read_configuration(args.cluster_config, ctype="cluster")
     except OperationException as e:
-        taskmgr.handle_exception(e)
+        handle_exception(e)
     # get the parsed configuration in the form of a dict
     config["cluster"] = taskmgr.get_configuration("cluster")
 
@@ -253,12 +269,12 @@ if __name__ == '__main__':
     try:
         taskmgr.read_configuration(args.command_config, ctype="command", allow_no_value=True)
     except OperationException as e:
-        taskmgr.handle_exception(e)
+        handle_exception(e)
     # get the parsed configuration in the form of a dict
     config["command"] = taskmgr.get_configuration("command")
 
     if not args.command in config["command"].keys():
-        taskmgr.handle_exception("Configuration in '%s' for command '%s' doesn't exist!" % (args.command_config, args.command))
+        handle_exception("Configuration in '%s' for command '%s' doesn't exist!" % (args.command_config, args.command))
 
     # iterate on the provided cluster names
     
@@ -266,7 +282,7 @@ if __name__ == '__main__':
 
         # check if the cluster definition exists
         if not cluster in config["cluster"].keys():
-            taskmgr.handle_exception("Configuration in '%s' for cluster '%s' doesn't exist!" % (args.cluster_config, cluster))
+            handle_exception("Configuration in '%s' for cluster '%s' doesn't exist!" % (args.cluster_config, cluster))
 
         # check if a hostlist was provided
         if not args.hosts_file:
@@ -284,7 +300,7 @@ if __name__ == '__main__':
                     if re.search(config["cluster"][cluster]["pattern"], host, re.IGNORECASE):
                         hosts.append(host.rstrip())
             except Exception as e: 
-                taskmgr.handle_exception("Problem while reading host file '%s': %s" % (args.hosts_file, str(e)))
+                handle_exception("Problem while reading host file '%s': %s" % (args.hosts_file, str(e)))
 
         async_worker = AsyncWorker()
         taskmgr.append_worker_pool(async_worker)
@@ -335,15 +351,15 @@ if __name__ == '__main__':
     #        # stop and wait until check returns true
     #        pass
     #    else:
-    #        taskmgr.handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))
+    #        handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))
 
     #try:
     #    print cluster_config[args.cluster_name]["check_host_alive"]
     #    hosts = [ "3capp-webde-dev01" ]
     #    result = execute(cluster_config[args.cluster_name]["check_host_alive"], "22", hosts=hosts)
     #except KeyError:
-    #    taskmgr.handle_exception("Desired cluster '%s' doesn't exist in the cluster configuration file '%s'!" % (args.cluster_name, args.cluster_config))
+    #    handle_exception("Desired cluster '%s' doesn't exist in the cluster configuration file '%s'!" % (args.cluster_name, args.cluster_config))
     #except Exception as e:
     #    raise
-    #    #taskmgr.handle_exception(e)
+    #    #handle_exception(e)
 
