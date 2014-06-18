@@ -56,8 +56,8 @@ class TaskMgr(object):
         parser.add_argument("-v", "--version", action="version", version=__version__)
         parser.add_argument("--cluster-config", help="The location of the cluster configuration file", default="cluster.ini")
         parser.add_argument("--command-config", help="The location of the cluster configuration file", default="commands.ini")
-        parser.add_argument("--hosts-file", help="File storing the hosts to work on, one by line. If not used, the hostnames from cluster.ini are used.") # fixme
-        parser.add_argument("-H", "--hosts", help="Hostnames to work on") # fixme
+        parser.add_argument("-H", "--hosts-file", help="File storing the hosts to work on, one by line. If not used, the hostnames from cluster.ini are used.") # fixme
+        #parser.add_argument("-H", "--hosts", help="Hostnames to work on") # fixme
         parser.add_argument("-n", "--cluster-name", help="The name of the cluster to work on", action='append', required=True)
         parser.add_argument("-c", "--command", help="THe name of the command to run", required=True)
         parser.add_argument("-d", "--debug", help="Show debug information", action="store_true", default=False)
@@ -103,7 +103,7 @@ class TaskMgr(object):
         return self.worker_pools
 
 
-def initialize_logger(logfile, debug, logformat='%(asctime)s - %(levelname)s - %(message)s'):
+def initialize_logger(logfile, debug, format_file, format_console):
     """ initialize logging - console """
     if debug:
         loglevel = logging.DEBUG
@@ -113,30 +113,90 @@ def initialize_logger(logfile, debug, logformat='%(asctime)s - %(levelname)s - %
     l = logging.getLogger()
     l.setLevel(loglevel)
 
+    fh = logging.FileHandler(logfile)
+    fh.setLevel(loglevel)
+
     ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(loglevel)
-    formatter = logging.Formatter(logformat)
-    ch.setFormatter(formatter)
+    ch.setLevel(loglevel)  
+    formatter_file = logging.Formatter(format_file)
+    formatter_console = logging.Formatter(format_console)
+    ch.setFormatter(formatter_console)
+    fh.setFormatter(formatter_file)
+
     l.addHandler(ch)
+    l.addHandler(fh)
 
     return l
+
+def log_info(msg, *args, **kwargs):
+    global l
+    args, kwargs = extend_logger_information(*args, **kwargs)
+    l.info(msg, *args, **kwargs)
+
+def log_debug(msg, *args, **kwargs):
+    global l
+    args, kwargs = extend_logger_information(*args, **kwargs)
+    l.debug(msg, *args, **kwargs)
+
+def log_warning(msg, *args, **kwargs):
+    global l
+    args, kwargs = extend_logger_information(*args, **kwargs)
+    l.warning(msg, *args, **kwargs)
+
+def log_critical(msg, *args, **kwargs):
+    global l
+    args, kwargs = extend_logger_information(*args, **kwargs)
+    l.critical(msg, *args, **kwargs)
+
+def log_exception(msg, *args, **kwargs):
+    global l
+    args, kwargs = extend_logger_information(*args, **kwargs)
+    l.exception(msg, *args, **kwargs)
+
+
+def extend_logger_information(*args, **kwargs):
+    if not "extra" in kwargs:
+        kwargs["extra"] = dict()
+
+    # convert args from tuple to list so we can modify it
+    newargs = list(args)
+
+    # initialize host and cluster with default values
+    host = "local"
+    cluster = "none"
+
+    # get host and cluster from args, if provided
+    try:
+        host, cluster = newargs
+        # remove them from args
+        newargs.remove(host)
+        newargs.remove(cluster)
+    except:
+        pass
+
+    # add host and cluster to kwargs, will be passed to the logger
+    kwargs["extra"]["host"] = host
+    kwargs["extra"]["cluster"] = cluster
+
+    # return the modified arguments
+    return newargs, kwargs
 
 def handle_exception(exception, fatal=True):
     global l
     if type(exception) == OperationException:
-        l.critical(e)
+        log_critical(e)
         exit_if_fatal(fatal)
 
     elif type(exception) == str:
-        l.critical(exception)
+        log_critical(exception)
         exit_if_fatal(fatal)
 
     elif type(exception) == unicode:
-        l.critical(exception)
+        log_critical(exception)
         exit_if_fatal(fatal)
 
     else:
-        l.critical("Unknown exception type: %s" % type(exception))
+        log_critical("Unknown exception type: %s" % type(exception))
         exit_if_fatal(fatal)
 
 def exit_if_fatal(fatal=True):
@@ -175,7 +235,21 @@ def worker(host, cluster, config, args):
                 print "%s: failed" % cluster
         elif action == "wait":
             # stop and wait until check returns true
-            pass
+            check_name = config["cluster"][cluster][cmd_name].split(":")[0]
+            check_arguments = ":".join(config["cluster"][cluster][cmd_name].split(":")[1:])
+            with quiet():
+                try:
+                    log_info("Starting wait", host, cluster)
+                    while True:
+                        result = execute(check_name, check_arguments, hosts=[host])
+                        if result[host] == True:
+                            break
+                        else:
+                            time.sleep(1)
+                    log_info("wait done", host, cluster)
+                except Exception as e:
+                    handle_exception("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
+
         else:
             handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))    
 
@@ -252,9 +326,11 @@ if __name__ == '__main__':
 
     # initialize logger
     try:
-        l = initialize_logger(None, args.debug)
+        format_file = '%(asctime)s %(host)s/%(cluster)s %(levelname)s - %(message)s'
+        format_console = '%(host)s/%(cluster)s %(levelname)s - %(message)s'
+        l = initialize_logger('taskmgr.log', args.debug, format_file, format_console)
     except Exception as e:
-        print "Can't initialize logger!"
+        print "Can't initialize logger: ", str(e)
         sys.exit(1)
 
     # parse the cluster configuration
