@@ -36,9 +36,9 @@ def check_port(host, port, protocol):
         result = sock.connect_ex((host, port))
         sock.close()
         if result == 0:
-            return False
-        else:
             return True
+        else:
+            return False
     else:
         raise ValueError("type must be either 'tcp' or 'udp'")
 

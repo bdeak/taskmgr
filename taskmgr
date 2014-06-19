@@ -113,6 +113,47 @@ class TaskMgr(object):
     def get_worker_pools(self):
         return self.worker_pools
 
+    def get_node_list_for_cluster(self, cluster):
+
+        # check if the cluster definition exists
+        if not cluster in self.config["cluster"].keys():
+            handle_exception("Configuration in '%s' for cluster '%s' doesn't exist!" % (self.args.cluster_config, cluster))
+
+        # check if a hostlist was provided
+        if not self.args.hosts_file:
+            # not provided, use the hostnames defined in cluster.ini
+            hosts = subprocess.Popen(["/bin/bash", "-c", "echo %s" % self.config["cluster"][cluster]['hosts']], stdout=subprocess.PIPE).communicate()[0].rstrip().split(" ")
+        else:
+            # get the hosts from the host file which are matching the pattern given for the current cluster in cluster.ini
+            # expand the expression found in cluster.ini using bash - might need to rewrite this in pure python?
+            hosts = list()
+            try:
+                f = open(self.args.hosts_file)
+                for host in f.readlines():
+                    if re.search("(^\s*$|^#)", host):
+                        continue
+                    if re.search(self.config["cluster"][cluster]["pattern"], host, re.IGNORECASE):
+                        hosts.append(host.rstrip())
+            except Exception as e: 
+                handle_exception("Problem while reading host file '%s': %s" % (self.args.hosts_file, str(e)))
+        return hosts
+
+    def get_full_node_list(self):
+        hosts = list()
+        for cluster in sorted(self.args.cluster_name):
+            hosts.append(self.get_node_list_for_cluster(cluster))
+        # return a flattened list (instead of lists of lists)
+        return sorted([item for sublist in hosts for item in sublist])
+
+# create own loglevel 'important' for showing important information with coloring
+# http://stackoverflow.com/a/13638084
+IMPORTANT_LEVEL_NUM = 25
+logging.addLevelName(IMPORTANT_LEVEL_NUM, "IMPORTANT")
+def important(self, message, *args, **kwargs):
+    if self.isEnabledFor(IMPORTANT_LEVEL_NUM):
+        self._log(IMPORTANT_LEVEL_NUM, message, args, **kwargs)
+
+logging.Logger.important = important
 
 def initialize_logger(logfile, debug, format_file, format_console):
     """ initialize logging - console """
@@ -170,6 +211,10 @@ def log_exception(msg, *args, **kwargs):
     args, kwargs = extend_logger_information(*args, **kwargs)
     l.exception(msg, *args, **kwargs)
 
+def log_important(msg, *args, **kwargs):
+    global l
+    args, kwargs = extend_logger_information(*args, **kwargs)
+    l.important(msg, *args, **kwargs)    
 
 def extend_logger_information(*args, **kwargs):
     if not "extra" in kwargs:
@@ -242,19 +287,31 @@ def exit_handler(exit_code=None):
 def print_statistics():
     global taskmgr
     results = dict()
+    actual_list = list()
+
     for async_worker in taskmgr.get_worker_pools():
         while not async_worker.result_queue_empty():
             host, cluster, result = async_worker.result_queue_get(block=True)
             if not cluster in results:
                 results[cluster] = dict()
             results[cluster][host] = result
+            actual_list.append(host)
+
     results_flat = [host for cluster in results.itervalues() for host in cluster.itervalues()]
     results_ok = [i for i in results_flat if i == True]
     results_failed = [i for i in results_flat if i == False]
 
+    # fixme: print the list of nodes that were not executed, using a diff of the two lists
+    expected_list = taskmgr.get_full_node_list()
+    # get the difference of the expected and the actual lists
+    # danger: this will kill ordering (ok), and remove unique elements (should be ok, one host should only be part of one cluster)
+    skipped_list = sorted(list(set(expected_list) - set(actual_list)))
+
     if len(results_flat) > 0:
         log_info("=" * 80)
         log_info("Statistics: ")
+        log_info("")
+        log_info("Expected: %d" % len(expected_list))
         log_info('Total: %d' % len(results_flat))
         log_info('OK: %d/%0.2f%% |  Failed: %d/%0.2f%%' % (len(results_ok), float(len(results_ok))/float(len(results_flat))*100, len(results_failed), float(len(results_failed))/float(len(results_flat))*100))
         if len(results_failed):
@@ -262,9 +319,16 @@ def print_statistics():
             log_info("-" * 60)
             log_info("Failed hosts:")
             for cluster in sorted(results.keys()):
-                for host in results[cluster].keys():
+                for host in sorted(results[cluster].keys()):
                     if results[cluster][host] == False:
                         log_info("%s / %s" % (cluster, host))
+        if len(skipped_list):
+            log_info("")
+            log_info("-" * 60)
+            log_info("Skipped hosts:")
+            for host in skipped_list:
+                log_info(host)
+
     return (results_flat, results_ok, results_failed)
 
 def worker(host, cluster, config, args):
@@ -295,7 +359,7 @@ def worker(host, cluster, config, args):
             erroraction = "stop"
         erroractions_available = ["stop", "skip"]
         if not erroraction in erroractions_available:
-            handle_exception("Erroraction '%s' for command '%s/%s %s' is unknown. Please use either of: %s" % (erroraction, args.command, action, cmd_name, ",".join(erroractions_available)))
+            handle_exception("Error action '%s' for command '%s/%s %s' is unknown. Please use either of: %s" % (erroraction, args.command, action, cmd_name, ",".join(erroractions_available)))
         
         # pair the check name with the one that is defined in the cluster configuration
         if not cmd_name in config['cluster'][cluster]:
@@ -325,11 +389,10 @@ def worker(host, cluster, config, args):
                 result = run_check_tasks(host, cluster, cmd_name, cmd_segments, multiple)
             except Exception as e:
                 raise
-                #handle_exception(e, host, cluster)
             if not result:
                 log_error("%s '%s' failed" % (action, cmd_name), host, cluster)
                 if erroraction == "skip":
-                    log_warning("Erroraction for %s '%s' is 'skip', moving on with next host, but not stopping" % (action, cmd_name), host, cluster)
+                    log_warning("Error action for %s '%s' is 'skip', moving on with next host, but not stopping" % (action, cmd_name), host, cluster)
                     return (host, cluster, False)
                 elif erroraction == "stop":
                     raise StopException("Requested action for %s %s on %s/%s is '%s'" %(action, cmd_name, cluster, host, erroraction))
@@ -342,7 +405,6 @@ def worker(host, cluster, config, args):
                 result = run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple)
             except Exception as e:
                 raise
-                #handle_exception(e, host, cluster)
             if not result:
                 # for this we would need to implement timeouts in run_wait_tasks, because right now False is never returned
                 # in this case will need to evaluate 'erroraction' 
@@ -354,8 +416,7 @@ def worker(host, cluster, config, args):
         else:
             handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config), host, cluster)    
 
-    # fixme: remove this!
-    #time.sleep(randint(2,9))
+    log_important("All commands for %s/%s have been successfully run" % (cluster, host), host, cluster)
     return (host, cluster, True)
 
 def run_check_tasks(host, cluster, cmd_name, cmd_segments, multiple):
@@ -415,7 +476,7 @@ def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple):
         if not check_name in fabricmain._task_names(callables):
             raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % check_name)
 
-        log_debug("Starting wait %s: '%s %s' returns..." % (check_name, check_arguments), host, cluster)
+        log_debug("Starting wait %s: '%s %s' returns..." % (cmd_name, check_name, check_arguments), host, cluster)
         while True:
             # this loop is needed to ensure we wait until the check is finally ok
             try:
@@ -454,7 +515,8 @@ class AsyncWorker:
         self.job_queue = multiprocessing.Queue()
         self.result_queue = multiprocessing.Queue() 
         self.workers = list()
-        self.faulty_clusters = dict()
+        self.failed_clusters = dict()
+        #self.failed_nodes = dict()
         #self.lock = multiprocessing.Lock()
 
     def add_job(self, host, cluster, config, args):
@@ -471,23 +533,59 @@ class AsyncWorker:
         while not self.job_queue.empty():
             try:
                 host, cluster, config, args = self.job_queue.get(block=False)
-                if not cluster in self.faulty_clusters.keys():
-                    self.result_queue.put(worker_func(host, cluster, config, args)) # fixme, change to kwargs
-                elif self.faulty_clusters[cluster] == False:
-                    log_error("Due to previous errors, no more tasks on cluster '%s' are executed as of now." % cluster, host, cluster)
-                    self.faulty_clusters[cluster] = True
+
+                # implement failing policy:
+                # we don't allow any more jobs for faulty nodes
+                # but we allow other nodes to finish
+                # we don't start any new nodes
+                # flags are set in the exception handling part
+                if cluster in self.failed_clusters.keys():
+                    if self.failed_clusters[cluster]['!alerted!'] == False:
+                        log_error("Due to previous errors, new nodes on cluster '%s' are not processed. Already running tasks are allowed to finish." % cluster, host, cluster)
+                        self.failed_clusters[cluster]['!alerted!'] = True
+                    if host in self.failed_clusters[cluster].keys():
+                        if self.failed_clusters[cluster][host] == False:
+                            # first occurance, notify
+                            log_error("Due to previous errors, no more tasks on '%s/%s' are executed as of now." % (cluster, host), host, cluster)
+                            self.failed_clusters[cluster][host] = True
+                            continue
+                        else:
+                            log_warning("skipping instead of starting")
+                            continue
+                    else:
+                        # in the marked cluster, but not marked host, don't allow to continue
+                        continue
+                else:
+                    # not marked cluster, allow to continue
+                    pass
+
+                # if here, start the task
+                self.result_queue.put(worker_func(host, cluster, config, args)) # fixme, change to kwargs
+
             except Queue.Empty:
                 pass
             except KeyboardInterrupt:
                 pass
             except Exception as e:
+
+                log_exception(e, host, cluster)
+
+                # this indicates that a vital task has failed (erroraction==stop)
+                # or in case there was only one check at a command, then that one check failed
+                # in this case put a result entry in the queue
+                self.result_queue.put((host, cluster, False))
+                
                 # add the given cluster/node to the faulty clusters list
-                # we don't allow any more jobs for the faulty nodes
-                # but we allow other nodes to finish
-                # we don't start any new nodes
+                # mark the cluster as faulty by creating the cluster key if it doesn't already exist
+                if not cluster in self.failed_clusters.keys():
+                    self.failed_clusters[cluster] = dict()
+                    self.failed_clusters[cluster]["!alerted!"] = False
+
+                # mark the node as faulty by adding it to the dict
                 # False means that it has not been notified yet
-                if not cluster in self.faulty_clusters.keys():
-                    self.faulty_clusters[cluster] = False
+                # after notification flag will be turned true to avoid re-notification
+                if not host in self.failed_clusters[cluster].keys():
+                    self.failed_clusters[cluster][host] = False
 
     def wait(self):
         for worker in self.workers:
@@ -516,16 +614,17 @@ class AsyncWorker:
 BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE = range(8)
 
 COLORS = {
-    'WARNING'  : YELLOW,
-    'CRITICAL' : RED,
-    'ERROR'    : RED,
-    'RED'      : RED,
-    'GREEN'    : GREEN,
-    'YELLOW'   : YELLOW,
-    'BLUE'     : BLUE,
-    'MAGENTA'  : MAGENTA,
-    'CYAN'     : CYAN,
-    'WHITE'    : WHITE,
+    'WARNING'   : YELLOW,
+    'CRITICAL'  : RED,
+    'ERROR'     : RED,
+    'IMPORTANT' : GREEN,
+    'RED'       : RED,
+    'GREEN'     : GREEN,
+    'YELLOW'    : YELLOW,
+    'BLUE'      : BLUE,
+    'MAGENTA'   : MAGENTA,
+    'CYAN'      : CYAN,
+    'WHITE'     : WHITE,
 }
 
 RESET_SEQ = "\033[0m"
@@ -608,30 +707,34 @@ if __name__ == '__main__':
     if not args.command in config["command"].keys():
         handle_exception("Configuration in '%s' for command '%s' doesn't exist!" % (args.command_config, args.command))
 
+    # count how many machines will be processed - for statistics later on
+    nodelist = taskmgr.get_full_node_list()
+
     # iterate on the provided cluster names
     for cluster in args.cluster_name:
 
-        # check if the cluster definition exists
-        if not cluster in config["cluster"].keys():
-            handle_exception("Configuration in '%s' for cluster '%s' doesn't exist!" % (args.cluster_config, cluster))
-
-        # check if a hostlist was provided
-        if not args.hosts_file:
-            # not provided, use the hostnames defined in cluster.ini
-            hosts = subprocess.Popen(["/bin/bash", "-c", "echo %s" % config["cluster"][cluster]['hosts']], stdout=subprocess.PIPE).communicate()[0].rstrip().split(" ")
-        else:
-            # get the hosts from the host file which are matching the pattern given for the current cluster in cluster.ini
-            # expand the expression found in cluster.ini using bash - might need to rewrite this in pure python?
-            hosts = list()
-            try:
-                f = open(args.hosts_file)
-                for host in f.readlines():
-                    if re.search("(^\s*$|^#)", host):
-                        continue
-                    if re.search(config["cluster"][cluster]["pattern"], host, re.IGNORECASE):
-                        hosts.append(host.rstrip())
-            except Exception as e: 
-                handle_exception("Problem while reading host file '%s': %s" % (args.hosts_file, str(e)))
+        hosts = taskmgr.get_node_list_for_cluster(cluster)
+        ## check if the cluster definition exists
+        #if not cluster in config["cluster"].keys():
+        #    handle_exception("Configuration in '%s' for cluster '%s' doesn't exist!" % (args.cluster_config, cluster))
+        #
+        ## check if a hostlist was provided
+        #if not args.hosts_file:
+        #    # not provided, use the hostnames defined in cluster.ini
+        #    hosts = subprocess.Popen(["/bin/bash", "-c", "echo %s" % config["cluster"][cluster]['hosts']], stdout=subprocess.PIPE).communicate()[0].rstrip().split(" ")
+        #else:
+        #    # get the hosts from the host file which are matching the pattern given for the current cluster in cluster.ini
+        #    # expand the expression found in cluster.ini using bash - might need to rewrite this in pure python?
+        #    hosts = list()
+        #    try:
+        #        f = open(args.hosts_file)
+        #        for host in f.readlines():
+        #            if re.search("(^\s*$|^#)", host):
+        #                continue
+        #            if re.search(config["cluster"][cluster]["pattern"], host, re.IGNORECASE):
+        #                hosts.append(host.rstrip())
+        #    except Exception as e: 
+        #        handle_exception("Problem while reading host file '%s': %s" % (args.hosts_file, str(e)))
 
         async_worker = AsyncWorker()
         taskmgr.append_worker_pool(async_worker)
@@ -662,7 +765,7 @@ if __name__ == '__main__':
     if len(results_flat) and not len(results_failed):
         exit_code = 0
         log_info("")
-        log_info("All was OK!")
+        log_important("All was OK!")
     else:
         exit_code = 1
     sys.exit(exit_code)
