@@ -34,6 +34,9 @@ class TaskRunException(Exception):
 class NoSuchTaskException(Exception):
     pass
 
+class StopException(Exception):
+    pass
+
 class TaskMgr(object):
 
     def __init__(self):
@@ -287,7 +290,13 @@ def worker(host, cluster, config, args):
     for command in config["command"][args.command].keys():
         #print "command is", command
         #print "running check %s for cluster %s" % (check_name, cluster)
-        (action, cmd_name) = command.split(" ")
+        (action, cmd_name, erroraction) = command.split(" ")
+        if not erroraction:
+            erroraction = "stop"
+        erroractions_available = ["stop", "skip"]
+        if not erroraction in erroractions_available:
+            handle_exception("Erroraction '%s' for command '%s/%s %s' is unknown. Please use either of: %s" % (erroraction, args.command, action, cmd_name, ",".join(erroractions_available)))
+        
         # pair the check name with the one that is defined in the cluster configuration
         if not cmd_name in config['cluster'][cluster]:
             handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, cluster), host, cluster)
@@ -313,24 +322,30 @@ def worker(host, cluster, config, args):
         # iterate on the segments, process them one by one
         if action == "check":
             try:
-                result = run_check_tasks(host, cluster, cmd_segments, multiple)
+                result = run_check_tasks(host, cluster, cmd_name, cmd_segments, multiple)
             except Exception as e:
                 raise
                 #handle_exception(e, host, cluster)
             if not result:
                 log_error("%s '%s' failed" % (action, cmd_name), host, cluster)
-                return (host, cluster, False)
+                if erroraction == "skip":
+                    log_warning("Erroraction for %s '%s' is 'skip', moving on with next host, but not stopping" % (action, cmd_name), host, cluster)
+                    return (host, cluster, False)
+                elif erroraction == "stop":
+                    raise StopException("Requested action for %s %s on %s/%s is '%s'" %(action, cmd_name, cluster, host, erroraction))
             else:
                 log_info("%s '%s' OK" % (action, cmd_name), host, cluster)
         
         elif action == "wait":
             # stop and wait until check returns true
             try:
-                result = run_wait_tasks(host, cluster, cmd_segments, multiple)
+                result = run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple)
             except Exception as e:
                 raise
                 #handle_exception(e, host, cluster)
             if not result:
+                # for this we would need to implement timeouts in run_wait_tasks, because right now False is never returned
+                # in this case will need to evaluate 'erroraction' 
                 log_error("%s '%s' failed" % (action, cmd_name), host, cluster)
                 return (host, cluster, False)
             else:
@@ -343,7 +358,7 @@ def worker(host, cluster, config, args):
     #time.sleep(randint(2,9))
     return (host, cluster, True)
 
-def run_check_tasks(host, cluster, cmd_segments, multiple):
+def run_check_tasks(host, cluster, cmd_name, cmd_segments, multiple):
     """ A helper task called from worker() to execute a check task
         This is needed so that multiple checks can be evaluated with a log_critical
         AND condition
@@ -360,7 +375,7 @@ def run_check_tasks(host, cluster, cmd_segments, multiple):
             raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % check_name)
 
         try: 
-            log_debug("Executing check '%s %s'" % (check_name, check_arguments), host, cluster)
+            log_debug("Executing check %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
             with quiet():
                 result = execute(check_name, check_arguments, hosts=[host])
         except Exception as e:
@@ -387,7 +402,7 @@ def run_check_tasks(host, cluster, cmd_segments, multiple):
     else:
         return any(res == True for res in results)
 
-def run_wait_tasks(host, cluster, cmd_segments, multiple):
+def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple):
     global l
     global timeout
     global command_timeout
@@ -400,11 +415,11 @@ def run_wait_tasks(host, cluster, cmd_segments, multiple):
         if not check_name in fabricmain._task_names(callables):
             raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % check_name)
 
-        log_debug("Waiting until check '%s %s' returns..." % (check_name, check_arguments), host, cluster)
+        log_debug("Starting wait %s: '%s %s' returns..." % (check_name, check_arguments), host, cluster)
         while True:
             # this loop is needed to ensure we wait until the check is finally ok
             try:
-                log_debug("Executing wait '%s %s'" % (check_name, check_arguments), host, cluster)
+                log_debug("Executing wait %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
                 with quiet():             
                     result = execute(check_name, check_arguments, hosts=[host])
             except Exception as e:
@@ -465,8 +480,11 @@ class AsyncWorker:
                 pass
             except KeyboardInterrupt:
                 pass
-            except Exception:
-                # add the given cluster to the faulty clusters list
+            except Exception as e:
+                # add the given cluster/node to the faulty clusters list
+                # we don't allow any more jobs for the faulty nodes
+                # but we allow other nodes to finish
+                # we don't start any new nodes
                 # False means that it has not been notified yet
                 if not cluster in self.faulty_clusters.keys():
                     self.faulty_clusters[cluster] = False
