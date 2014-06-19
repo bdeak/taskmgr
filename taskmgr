@@ -127,7 +127,8 @@ def initialize_logger(logfile, debug, format_file, format_console):
     ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(loglevel)  
     formatter_file = logging.Formatter(format_file)
-    formatter_console = logging.Formatter(format_console)
+    # use a colored formatter
+    formatter_console = ColorFormatter(format_console)
     ch.setFormatter(formatter_console)
     fh.setFormatter(formatter_file)
 
@@ -252,7 +253,7 @@ def print_statistics():
         log_info("=" * 80)
         log_info("Statistics: ")
         log_info('Total: %d' % len(results_flat))
-        log_info('OK: %d/%0.2f%% |  Failed: %d/%0.2f%%' % (len(results_ok), len(results_ok)/len(results_flat)*100, len(results_failed), len(results_failed)/len(results_flat)*100))
+        log_info('OK: %d/%0.2f%% |  Failed: %d/%0.2f%%' % (len(results_ok), float(len(results_ok))/float(len(results_flat))*100, len(results_failed), float(len(results_failed))/float(len(results_flat))*100))
         if len(results_failed):
             log_info("")
             log_info("-" * 60)
@@ -314,7 +315,8 @@ def worker(host, cluster, config, args):
             try:
                 result = run_check_tasks(host, cluster, cmd_segments, multiple)
             except Exception as e:
-                handle_exception(e, host, cluster)
+                raise
+                #handle_exception(e, host, cluster)
             if not result:
                 log_error("%s '%s' failed" % (action, cmd_name), host, cluster)
                 return (host, cluster, False)
@@ -326,7 +328,8 @@ def worker(host, cluster, config, args):
             try:
                 result = run_wait_tasks(host, cluster, cmd_segments, multiple)
             except Exception as e:
-                handle_exception(e, host, cluster)
+                raise
+                #handle_exception(e, host, cluster)
             if not result:
                 log_error("%s '%s' failed" % (action, cmd_name), host, cluster)
                 return (host, cluster, False)
@@ -436,6 +439,8 @@ class AsyncWorker:
         self.job_queue = multiprocessing.Queue()
         self.result_queue = multiprocessing.Queue() 
         self.workers = list()
+        self.faulty_clusters = dict()
+        #self.lock = multiprocessing.Lock()
 
     def add_job(self, host, cluster, config, args):
         self.job_queue.put((host, cluster, config, args))
@@ -443,6 +448,7 @@ class AsyncWorker:
     def start_workers(self, worker_func, max_parallel):
         for i in range(max_parallel):
             w = multiprocessing.Process(target=self._worker_helper, args=(worker_func,))
+            w.daemon = True
             w.start()
             self.workers.append(w)
 
@@ -450,13 +456,20 @@ class AsyncWorker:
         while not self.job_queue.empty():
             try:
                 host, cluster, config, args = self.job_queue.get(block=False)
-                self.result_queue.put(worker_func(host, cluster, config, args)) # fixme, change to kwargs
+                if not cluster in self.faulty_clusters.keys():
+                    self.result_queue.put(worker_func(host, cluster, config, args)) # fixme, change to kwargs
+                elif self.faulty_clusters[cluster] == False:
+                    log_error("Due to previous errors, no more tasks on cluster '%s' are executed as of now." % cluster, host, cluster)
+                    self.faulty_clusters[cluster] = True
             except Queue.Empty:
                 pass
             except KeyboardInterrupt:
                 pass
             except Exception:
-                raise
+                # add the given cluster to the faulty clusters list
+                # False means that it has not been notified yet
+                if not cluster in self.faulty_clusters.keys():
+                    self.faulty_clusters[cluster] = False
 
     def wait(self):
         for worker in self.workers:
@@ -477,6 +490,55 @@ class AsyncWorker:
         while not self.job_queue.empty():
             self.job_queue.get()
         self.job_queue.close()
+
+
+############ Colorformatter #############
+# source http://stackoverflow.com/a/2532931, modified
+
+BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE = range(8)
+
+COLORS = {
+    'WARNING'  : YELLOW,
+    'CRITICAL' : RED,
+    'ERROR'    : RED,
+    'RED'      : RED,
+    'GREEN'    : GREEN,
+    'YELLOW'   : YELLOW,
+    'BLUE'     : BLUE,
+    'MAGENTA'  : MAGENTA,
+    'CYAN'     : CYAN,
+    'WHITE'    : WHITE,
+}
+
+RESET_SEQ = "\033[0m"
+COLOR_SEQ = "\033[1;%dm"
+BOLD_SEQ  = "\033[1m"
+
+class ColorFormatter(logging.Formatter):
+
+    def __init__(self, *args, **kwargs):
+        # can't do super(...) here because Formatter is an old school class
+        logging.Formatter.__init__(self, *args, **kwargs)
+
+    def format(self, record):
+        levelname = record.levelname
+        message   = logging.Formatter.format(self, record)
+        if levelname in COLORS.keys():
+            color     = COLOR_SEQ % (30 + COLORS[levelname])
+            message   = message.replace("$RESET", RESET_SEQ)\
+                               .replace("$BOLD",  BOLD_SEQ)\
+                               .replace("$COLOR", color)
+            for k,v in COLORS.items():
+                message = message.replace("$" + k,    COLOR_SEQ % (v+30))\
+                                 .replace("$BG" + k,  COLOR_SEQ % (v+40))\
+                                 .replace("$BG-" + k, COLOR_SEQ % (v+40))
+        else:
+            message = message.replace("$COLOR", "")
+            return message
+        return message + RESET_SEQ
+
+
+
 ###################################################################################3
 
 # global variable holding logger object
@@ -502,8 +564,8 @@ if __name__ == '__main__':
 
     # initialize logger
     try:
-        format_file = '%(asctime)s %(host)s/%(cluster)s %(levelname)s - %(message)s'
-        format_console = '%(host)s/%(cluster)s %(levelname)s - %(message)s'
+        format_file = '%(asctime)s %(cluster)s/%(host)s %(levelname)s - %(message)s'
+        format_console = '$COLOR%(cluster)s/%(host)s %(levelname)s - %(message)s'
         l = initialize_logger('taskmgr.log', args.debug, format_file, format_console)
     except Exception as e:
         print "Can't initialize logger: ", str(e)
