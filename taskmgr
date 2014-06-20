@@ -6,6 +6,7 @@ from fabric import main as fabricmain
 from fabric import network as fabricnetwork
 from fabric.api import *
 
+import utils.log
 import argparse
 import logging
 import configparser
@@ -21,7 +22,7 @@ import multiprocessing
 import Queue
 
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 
 class OperationException(Exception):
     pass
@@ -69,45 +70,12 @@ class TaskMgr(object):
         parser.add_argument("--cluster-config", help="The location of the cluster configuration file", default="cluster.ini")
         parser.add_argument("--command-config", help="The location of the cluster configuration file", default="commands.ini")
         parser.add_argument("-H", "--hosts-file", help="File storing the hosts to work on, one by line. If not used, the hostnames from cluster.ini are used.") # fixme
-        #parser.add_argument("-H", "--hosts", help="Hostnames to work on") # fixme
         parser.add_argument("-n", "--cluster-name", help="The name of the cluster to work on", action='append', required=True)
         parser.add_argument("-c", "--command", help="THe name of the command to run", required=True)
         parser.add_argument("-d", "--debug", help="Show debug information", action="store_true", default=False)
         parser.add_argument("-x", "--unsafe", help="Enable unsafe operation. (disable host key checking, etc)", action='store_true', default=False)
         args = parser.parse_args()
         return args
-
-    #def worker(self, host, cluster):
-    #    # create a lock object if it doesn't exist
-    #    #if not self.lock:
-    #    #    self.lock = Lock()
-    #    print "in here"
-    #    for command in self.config["command"][self.args.command].keys():
-    #        (action, cmd_name) = command.split(" ")
-    #        # pair the check name with the one that is defined in the cluster configuration
-    #        if not cmd_name in self.config['cluster'][cluster]:
-    #            self.handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, self.args.cluster_config, cluster))
-    #        # call the command
-    #        if action == "check":
-    #            # run the check, fail if result is false
-    #            check_name = config["cluster"][cluster][cmd_name].split(":")[0]
-    #            check_arguments = ":".join(config["cluster"][cluster][cmd_name].split(":")[1:])
-    #            with quiet():
-    #                result = execute(check_name, check_arguments, hosts=[host])
-    #            #with self.lock:          
-    #            if result[host]:
-    #                print "%s: all ok" % cluster
-    #            else:
-    #                print "%s: failed" % cluster
-    #        elif action == "wait":
-    #            # stop and wait until check returns true
-    #            pass
-    #        else:
-    #            self.handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config))
-    #    time.sleep(randint(2,9))
-
-    #def worker_cb(self, host, cluster):
-    #    print "finished with %s on cluster %s" % (host, cluster)
 
     def append_worker_pool(self, pool):
         self.worker_pools.append(pool)
@@ -147,113 +115,15 @@ class TaskMgr(object):
         # return a flattened list (instead of lists of lists)
         return sorted([item for sublist in hosts for item in sublist])
 
-# create own loglevel 'important' for showing important information with coloring
-# http://stackoverflow.com/a/13638084
-IMPORTANT_LEVEL_NUM = 25
-logging.addLevelName(IMPORTANT_LEVEL_NUM, "IMPORTANT")
-def important(self, message, *args, **kwargs):
-    if self.isEnabledFor(IMPORTANT_LEVEL_NUM):
-        self._log(IMPORTANT_LEVEL_NUM, message, args, **kwargs)
-
-logging.Logger.important = important
-
-def initialize_logger(logfile, debug, format_file, format_console):
-    """ initialize logging - console """
-    if debug:
-        loglevel = logging.DEBUG
-    else:
-        loglevel = logging.INFO
-
-    l = logging.getLogger()
-    l.setLevel(loglevel)
-
-    fh = logging.FileHandler(logfile)
-    fh.setLevel(loglevel)
-
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(loglevel)  
-    formatter_file = logging.Formatter(format_file)
-    # use a colored formatter
-    formatter_console = ColorFormatter(format_console)
-    ch.setFormatter(formatter_console)
-    fh.setFormatter(formatter_file)
-
-    l.addHandler(ch)
-    l.addHandler(fh)
-
-    return l
-
-def log_info(msg, *args, **kwargs):
-    global l
-    args, kwargs = extend_logger_information(*args, **kwargs)
-    l.info(msg, *args, **kwargs)
-
-def log_debug(msg, *args, **kwargs):
-    global l
-    args, kwargs = extend_logger_information(*args, **kwargs)
-    l.debug(msg, *args, **kwargs)
-
-def log_warning(msg, *args, **kwargs):
-    global l
-    args, kwargs = extend_logger_information(*args, **kwargs)
-    l.warning(msg, *args, **kwargs)
-
-def log_error(msg, *args, **kwargs):
-    global l
-    args, kwargs = extend_logger_information(*args, **kwargs)
-    l.error(msg, *args, **kwargs)
-
-def log_critical(msg, *args, **kwargs):
-    global l
-    args, kwargs = extend_logger_information(*args, **kwargs)
-    l.critical(msg, *args, **kwargs)
-
-def log_exception(msg, *args, **kwargs):
-    global l
-    args, kwargs = extend_logger_information(*args, **kwargs)
-    l.exception(msg, *args, **kwargs)
-
-def log_important(msg, *args, **kwargs):
-    global l
-    args, kwargs = extend_logger_information(*args, **kwargs)
-    l.important(msg, *args, **kwargs)    
-
-def extend_logger_information(*args, **kwargs):
-    if not "extra" in kwargs:
-        kwargs["extra"] = dict()
-
-    # convert args from tuple to list so we can modify it
-    newargs = list(args)
-
-    # initialize host and cluster with default values
-    host = "local"
-    cluster = "none"
-
-    # get host and cluster from args, if provided
-    try:
-        host, cluster = newargs
-        # remove them from args
-        newargs.remove(host)
-        newargs.remove(cluster)
-    except:
-        pass
-
-    # add host and cluster to kwargs, will be passed to the logger
-    kwargs["extra"]["host"] = host
-    kwargs["extra"]["cluster"] = cluster
-
-    # return the modified arguments
-    return newargs, kwargs
 
 def handle_exception(exception, *args, **kwargs):
-    global l
     global pid
     if "fatal" in kwargs.keys():
         fatal = kwargs["fatal"]
     else:
         fatal = True
     
-    log_critical(exception, *args)
+    l.critical(exception, *args)
     
     if os.getpid() == pid:
         # this is the parent process, do cleanup
@@ -289,8 +159,8 @@ def exit_handler(exit_code=None):
                 exit_code = 1
             else:
                 exit_code = 0
-                log_info("")
-                log_info("All was OK!")
+                l.info("")
+                l.info("All was OK!")
     sys.exit(exit_code)
 
 def print_statistics():
@@ -317,26 +187,26 @@ def print_statistics():
     skipped_list = sorted(list(set(expected_list) - set(actual_list)))
 
     if len(results_flat) > 0:
-        log_info("=" * 80)
-        log_info("Statistics: ")
-        log_info("")
-        log_info("Expected: %d" % len(expected_list))
-        log_info('Total: %d' % len(results_flat))
-        log_info('OK: %d/%0.2f%% |  Failed: %d/%0.2f%%' % (len(results_ok), float(len(results_ok))/float(len(results_flat))*100, len(results_failed), float(len(results_failed))/float(len(results_flat))*100))
+        l.info("=" * 80)
+        l.info("Statistics: ")
+        l.info("")
+        l.info("Expected: %d" % len(expected_list))
+        l.info('Total: %d' % len(results_flat))
+        l.info('OK: %d/%0.2f%% |  Failed: %d/%0.2f%%' % (len(results_ok), float(len(results_ok))/float(len(results_flat))*100, len(results_failed), float(len(results_failed))/float(len(results_flat))*100))
         if len(results_failed):
-            log_info("")
-            log_info("-" * 60)
-            log_info("Failed hosts:")
+            l.info("")
+            l.info("-" * 60)
+            l.info("Failed hosts:")
             for cluster in sorted(results.keys()):
                 for host in sorted(results[cluster].keys()):
                     if results[cluster][host] == False:
-                        log_info("%s / %s" % (cluster, host))
+                        l.info("%s / %s" % (cluster, host))
         if len(skipped_list):
-            log_info("")
-            log_info("-" * 60)
-            log_info("Skipped hosts:")
+            l.info("")
+            l.info("-" * 60)
+            l.info("Skipped hosts:")
             for host in skipped_list:
-                log_info(host)
+                l.info(host)
 
     return (results_flat, results_ok, results_failed)
 
@@ -345,7 +215,6 @@ def worker(host, cluster, config, args):
         The final result will represent the success or the failure of the given command on the given machine
         In case of a problem an exception is raised.
     """
-    global l
     global timeout
     global command_timeout
 
@@ -411,22 +280,6 @@ def worker(host, cluster, config, args):
         # split commands on 'cmd:', and filter out any empty elements
         cmd_segments = filter(bool, re.split("cmd:", tmp_command, flags=re.IGNORECASE))
 
-        # look for 'all|any' at the end of the 
-        # inspect the last segment, split it up
-
-        #cmd_segments = config["cluster"][cluster][cmd_name].split(" ")
-        ## check if all|any is at the end, if yes, remove it
-        #
-        #if cmd_segments[-1].lower() == "any" or cmd_segments[-1].lower() == "all":
-        #    if cmd_segments[-1].lower() == "any":
-        #        multiple = False
-        #    elif cmd_segments[-1].lower() == "all":
-        #        multiple = True
-        #    # remove it
-        #    cmd_segments.pop(-1)
-        #else:
-        #    multiple = True
-
         # call the commands
         # rule of thumb: on any failed check we return with false, meaning that the command failed
         # iterate on the segments, process them one by one
@@ -436,14 +289,14 @@ def worker(host, cluster, config, args):
             except Exception as e:
                 raise
             if not result:
-                log_error("%s '%s' failed" % (action, cmd_name), host, cluster)
+                l.error("%s '%s' failed" % (action, cmd_name), host, cluster)
                 if erroraction == "skip":
-                    log_warning("Error action for %s '%s' is 'skip', moving on with next host, but not stopping" % (action, cmd_name), host, cluster)
+                    l.warning("Error action for %s '%s' is 'skip', moving on with next host, but not stopping" % (action, cmd_name), host, cluster)
                     return (host, cluster, False)
                 elif erroraction == "stop":
                     raise StopException("Requested action for %s %s on %s/%s is '%s'" %(action, cmd_name, cluster, host, erroraction))
             else:
-                log_info("%s '%s' OK" % (action, cmd_name), host, cluster)
+                l.info("%s '%s' OK" % (action, cmd_name), host, cluster)
         
         elif action == "wait":
             # stop and wait until check returns true
@@ -454,23 +307,23 @@ def worker(host, cluster, config, args):
             if not result:
                 # for this we would need to implement timeouts in run_wait_tasks, because right now False is never returned
                 # in this case will need to evaluate 'erroraction' 
-                log_error("%s '%s' failed" % (action, cmd_name), host, cluster)
+                l.error("%s '%s' failed" % (action, cmd_name), host, cluster)
                 return (host, cluster, False)
             else:
-                log_info("%s '%s' OK" % (action, cmd_name), host, cluster)
+                l.info("%s '%s' OK" % (action, cmd_name), host, cluster)
 
         else:
             handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config), host, cluster)    
 
-    log_important("All commands for %s/%s have been successfully run" % (cluster, host), host, cluster)
+    l.important("All commands for %s/%s have been successfully run" % (cluster, host), host, cluster)
     return (host, cluster, True)
 
 def run_check_tasks(host, cluster, cmd_name, cmd_segments, multiple):
-    """ A helper task called from worker() to execute a check task
-        This is needed so that multiple checks can be evaluated with a log_critical
+    """ 
+        A helper task called from worker() to execute a check task
+        This is needed so that multiple checks can be evaluated with a l.critical
         AND condition
     """
-    global l
     global timeout
     global command_timeout
     global callables
@@ -482,7 +335,7 @@ def run_check_tasks(host, cluster, cmd_name, cmd_segments, multiple):
             raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % check_name)
 
         try: 
-            log_debug("Executing check %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
+            l.debug("Executing check %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
             with quiet():
                 result = execute(check_name, check_arguments, hosts=[host])
         except Exception as e:
@@ -510,7 +363,6 @@ def run_check_tasks(host, cluster, cmd_name, cmd_segments, multiple):
         return any(res == True for res in results)
 
 def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple):
-    global l
     global timeout
     global command_timeout
     global callables
@@ -522,22 +374,22 @@ def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple):
         if not check_name in fabricmain._task_names(callables):
             raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % check_name)
 
-        log_debug("Starting wait %s: '%s %s' returns..." % (cmd_name, check_name, check_arguments), host, cluster)
+        l.debug("Starting wait %s: '%s %s' returns..." % (cmd_name, check_name, check_arguments), host, cluster)
         while True:
             # this loop is needed to ensure we wait until the check is finally ok
             try:
-                log_debug("Executing wait %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
+                l.debug("Executing wait %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
                 with quiet():             
                     result = execute(check_name, check_arguments, hosts=[host])
             except Exception as e:
                 raise TaskRunException("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
             if result[host] == True:
                 # break out of while True
-                log_debug("Got response, moving on", host, cluster)
+                l.debug("Got response, moving on", host, cluster)
                 break
             else:
                 # failed, have to wait longer
-                log_debug("Waiting before retrying", host, cluster)
+                l.debug("Waiting before retrying", host, cluster)
                 time.sleep(5)
                 continue
         # we are here, so there was a successful result
@@ -587,16 +439,16 @@ class AsyncWorker:
                 # flags are set in the exception handling part
                 if cluster in self.failed_clusters.keys():
                     if self.failed_clusters[cluster]['!alerted!'] == False:
-                        log_error("Due to previous errors, new nodes on cluster '%s' are not processed. Already running tasks are allowed to finish." % cluster, host, cluster)
+                        l.error("Due to previous errors, new nodes on cluster '%s' are not processed. Already running tasks are allowed to finish." % cluster, host, cluster)
                         self.failed_clusters[cluster]['!alerted!'] = True
                     if host in self.failed_clusters[cluster].keys():
                         if self.failed_clusters[cluster][host] == False:
                             # first occurance, notify
-                            log_error("Due to previous errors, no more tasks on '%s/%s' are executed as of now." % (cluster, host), host, cluster)
+                            l.error("Due to previous errors, no more tasks on '%s/%s' are executed as of now." % (cluster, host), host, cluster)
                             self.failed_clusters[cluster][host] = True
                             continue
                         else:
-                            log_warning("skipping instead of starting")
+                            l.warning("skipping instead of starting")
                             continue
                     else:
                         # in the marked cluster, but not marked host, don't allow to continue
@@ -614,7 +466,7 @@ class AsyncWorker:
                 pass
             except Exception as e:
 
-                log_exception(e, host, cluster)
+                l.exception(e, host, cluster)
 
                 # this indicates that a vital task has failed (erroraction==stop)
                 # or in case there was only one check at a command, then that one check failed
@@ -654,58 +506,10 @@ class AsyncWorker:
         self.job_queue.close()
 
 
-############ Colorformatter #############
-# source http://stackoverflow.com/a/2532931, modified
-
-BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE = range(8)
-
-COLORS = {
-    'WARNING'   : YELLOW,
-    'CRITICAL'  : RED,
-    'ERROR'     : RED,
-    'IMPORTANT' : GREEN,
-    'RED'       : RED,
-    'GREEN'     : GREEN,
-    'YELLOW'    : YELLOW,
-    'BLUE'      : BLUE,
-    'MAGENTA'   : MAGENTA,
-    'CYAN'      : CYAN,
-    'WHITE'     : WHITE,
-}
-
-RESET_SEQ = "\033[0m"
-COLOR_SEQ = "\033[1;%dm"
-BOLD_SEQ  = "\033[1m"
-
-class ColorFormatter(logging.Formatter):
-
-    def __init__(self, *args, **kwargs):
-        # can't do super(...) here because Formatter is an old school class
-        logging.Formatter.__init__(self, *args, **kwargs)
-
-    def format(self, record):
-        levelname = record.levelname
-        message   = logging.Formatter.format(self, record)
-        if levelname in COLORS.keys():
-            color     = COLOR_SEQ % (30 + COLORS[levelname])
-            message   = message.replace("$RESET", RESET_SEQ)\
-                               .replace("$BOLD",  BOLD_SEQ)\
-                               .replace("$COLOR", color)
-            for k,v in COLORS.items():
-                message = message.replace("$" + k,    COLOR_SEQ % (v+30))\
-                                 .replace("$BG" + k,  COLOR_SEQ % (v+40))\
-                                 .replace("$BG-" + k, COLOR_SEQ % (v+40))
-        else:
-            message = message.replace("$COLOR", "")
-            return message
-        return message + RESET_SEQ
-
-
-
 ###################################################################################3
 
 # global variable holding logger object
-l = object
+#l = object
 taskmgr = object
 # timeouts to use
 timeout = 10
@@ -717,6 +521,15 @@ pid = os.getpid()
 docstring, callables, default = fabricmain.load_fabfile('fabfile')
 fabricmain.state.commands.update(callables)
 
+# initialize logger
+try:
+    format_file = '%(asctime)s %(clusterinfo)s - %(levelname)s - %(message)s'
+    format_console = '$COLOR%(clusterinfo)s%(levelname)s - %(message)s'
+    l = utils.log.initialize_logger('taskmgr.log', format_file, format_console)
+except Exception as e:
+    print "Can't initialize logger: ", str(e)
+    sys.exit(1)
+
 if __name__ == '__main__':
 
     config = dict()
@@ -725,15 +538,13 @@ if __name__ == '__main__':
     taskmgr = TaskMgr()
     args = taskmgr.get_arguments()
 
-    # initialize logger
-    try:
-        format_file = '%(asctime)s %(cluster)s/%(host)s %(levelname)s - %(message)s'
-        format_console = '$COLOR%(cluster)s/%(host)s %(levelname)s - %(message)s'
-        l = initialize_logger('taskmgr.log', args.debug, format_file, format_console)
-    except Exception as e:
-        print "Can't initialize logger: ", str(e)
-        sys.exit(1)
-
+    # set the loglevel based on args.debug
+    if args.debug:
+        loglevel = logging.DEBUG
+    else:
+        loglevel = logging.INFO
+    #l.setLevel(loglevel)
+    logging.getLogger().setLevel(loglevel)
     # parse the cluster configuration
     try:
         taskmgr.read_configuration(args.cluster_config, ctype="cluster")
@@ -813,15 +624,15 @@ if __name__ == '__main__':
     results_flat, results_ok, results_failed = print_statistics()
     if len(results_flat) and not len(results_failed):
         exit_code = 0
-        log_info("")
-        log_important("All was OK!")
+        l.info("")
+        l.important("All was OK!")
     else:
         exit_code = 1
     sys.exit(exit_code)
     # print final statistics 
     #results = dict()
-    #log_info("=" * 80)
-    #log_info("Statistics: ")
+    #l.info("=" * 80)
+    #l.info("Statistics: ")
     #for async_worker in taskmgr.get_worker_pools():
     #    while not async_worker.result_queue_empty():
     #        host, cluster, result = async_worker.result_queue_get(block=True)
@@ -833,20 +644,20 @@ if __name__ == '__main__':
     #results_ok = [i for i in results_flat if i == True]
     #results_failed = [i for i in results_flat if i == False]
 #
-    #log_info('Total: %d' % len(results_flat))
-    #log_info('OK: %d/%0.2f%% |  Failed: %d/%0.2f%%' % (len(results_ok), len(results_ok)/len(results_flat)*100, len(results_failed), len(results_failed)/len(results_flat)*100))
+    #l.info('Total: %d' % len(results_flat))
+    #l.info('OK: %d/%0.2f%% |  Failed: %d/%0.2f%%' % (len(results_ok), len(results_ok)/len(results_flat)*100, len(results_failed), len(results_failed)/len(results_flat)*100))
     #if len(results_failed):
-    #    log_info("")
-    #    log_info("-" * 60)
-    #    log_info("Failed hosts:")
+    #    l.info("")
+    #    l.info("-" * 60)
+    #    l.info("Failed hosts:")
     #    for cluster in sorted(results.keys()):
     #        for host in results[cluster].keys():
     #            if results[cluster][host] == False:
-    #                log_info("%s / %s" % (cluster, host))
+    #                l.info("%s / %s" % (cluster, host))
     #    sys.exit(1)
     #else:
-    #    log_info("")
-    #    log_info("All was OK!")
+    #    l.info("")
+    #    l.info("All was OK!")
     #    sys.exit(0)
 
     # todo:
