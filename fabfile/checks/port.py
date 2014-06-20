@@ -3,7 +3,7 @@ from fabric.api import *
 import socket
 import re
 
-@task
+@task(default=True)
 def check(input_params):
     """ Check if a given TCP port is open
         input_params parameter is a string, with the following fields:

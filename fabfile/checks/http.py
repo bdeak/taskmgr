@@ -5,7 +5,7 @@ import re
 import urllib
 import urllib2
 
-@task
+@task(default=True)
 def check(input_params):
     """ Check a HTTP or HTTPS service
         input_params parameter is a string, with the following fields:
