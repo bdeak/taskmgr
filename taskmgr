@@ -3,6 +3,7 @@
 
 # needed to properly import tasks, and to access internal fabric functionality
 from fabric import main as fabricmain 
+from fabric import network as fabricnetwork
 from fabric.api import *
 
 import argparse
@@ -72,6 +73,7 @@ class TaskMgr(object):
         parser.add_argument("-n", "--cluster-name", help="The name of the cluster to work on", action='append', required=True)
         parser.add_argument("-c", "--command", help="THe name of the command to run", required=True)
         parser.add_argument("-d", "--debug", help="Show debug information", action="store_true", default=False)
+        parser.add_argument("-x", "--unsafe", help="Enable unsafe operation. (disable host key checking, etc)", action='store_true', default=False)
         args = parser.parse_args()
         return args
 
@@ -263,7 +265,11 @@ def handle_exception(exception, *args, **kwargs):
 
 def exit_if_fatal(fatal=True):
     if fatal:
+        # close fabric ssh connections
+        fabricnetwork.disconnect_all()
         sys.exit(1)
+
+
 
 def exit_handler(exit_code=None):
     global taskmgr
@@ -271,6 +277,9 @@ def exit_handler(exit_code=None):
         # finish processing jobs, close queues
         async_worker.finish()
         async_worker.close_queues()
+
+    # close fabric ssh connections
+    fabricnetwork.disconnect_all()
 
     if exit_code is None or exit_code == 0:
         results_flat, results_ok, results_failed = print_statistics()
@@ -343,9 +352,21 @@ def worker(host, cluster, config, args):
     # set timeout values for facter
     env.timeout = timeout
     env.command_timeout = command_timeout
+    env.abort_on_prompts = True
+    env.use_ssh_config = True
+    if args.unsafe:
+        env.reject_unknown_hosts = False
+        env.skip_bad_hosts = False
+    else:
+        env.reject_unknown_hosts = True
+        env.skip_bad_hosts = True
 
     # ignore ctrl c here
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    # make paramiko shut up
+    logging.getLogger("paramiko").setLevel(logging.CRITICAL)
+
     # create a lock object if it doesn't exist
     #print "starting inside on %s" % host
 
@@ -585,7 +606,7 @@ class AsyncWorker:
                     pass
 
                 # if here, start the task
-                self.result_queue.put(worker_func(host, cluster, config, args)) # fixme, change to kwargs
+                self.result_queue.put(worker_func(host, cluster, config, args)) # put the results to the queue
 
             except Queue.Empty:
                 pass
@@ -785,6 +806,9 @@ if __name__ == '__main__':
         #    async_worker.finish()
         #    async_worker.close_queues()
         #sys.exit(1)
+
+    # close fabric ssh connections
+    fabricnetwork.disconnect_all()
 
     results_flat, results_ok, results_failed = print_statistics()
     if len(results_flat) and not len(results_failed):
