@@ -70,10 +70,11 @@ class TaskMgr(object):
         parser.add_argument("--cluster-config", help="The location of the cluster configuration file", default="cluster.ini")
         parser.add_argument("--command-config", help="The location of the cluster configuration file", default="commands.ini")
         parser.add_argument("-H", "--hosts-file", help="File storing the hosts to work on, one by line. If not used, the hostnames from cluster.ini are used.") # fixme
-        parser.add_argument("-n", "--cluster-name", help="The name of the cluster to work on", action='append', required=True)
+        parser.add_argument("-n", "--cluster-name", help="The name of the cluster to work on. Can be provided multiple times.", action='append', required=True)
         parser.add_argument("-c", "--command", help="THe name of the command to run", required=True)
         parser.add_argument("-d", "--debug", help="Show debug information", action="store_true", default=False)
         parser.add_argument("-x", "--unsafe", help="Enable unsafe operation. (disable host key checking, etc)", action='store_true', default=False)
+        parser.add_argument("--show-exception", help="Show exception when tasks fail", action='store_true', default=False)
         args = parser.parse_args()
         return args
 
@@ -234,17 +235,15 @@ def worker(host, cluster, config, args):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     # make paramiko shut up
-    logging.getLogger("paramiko").setLevel(logging.CRITICAL)
-
+    #logging.getLogger("paramiko").setLevel(logging.CRITICAL)
+    #logging.getLogger("paramiko").propagate = False
     # create a lock object if it doesn't exist
     #print "starting inside on %s" % host
 
     # command1: segment1 segment2 segment3
     # command2: segment1 segment2 segment3
-    for command in config["command"][args.command].keys():
-        #print "command is", command
-        #print "running check %s for cluster %s" % (check_name, cluster)
-        
+    for command, cmd_arguments in config["command"][args.command].items():
+
         try: 
             (action, cmd_name, erroraction) = command.split(" ")
         except ValueError:
@@ -264,6 +263,18 @@ def worker(host, cluster, config, args):
         # split the command on 'cmd:'
         # check if ' (all|any)$' matches the command
         tmp_command = config["cluster"][cluster][cmd_name]
+
+        # if arguments are passed from commands.ini, add them to tmp_command 
+        if not cmd_arguments is None:
+            tmp_command = tmp_command.replace('%ARGS%', cmd_arguments)
+
+        # sanity check
+        try:
+            i = tmp_command.index('%ARGS%')
+            raise ValueError("Placeholder '%ARGS%' is used for command '%s', but no arguments are passed from commands.ini!" % (cmd_name), host, cluster)
+        except:
+            pass
+
         m = re.search("^(.*) (any|all)$", tmp_command, flags=re.IGNORECASE)
         if m:
             # found, set multiple, and remove it from the end of the string
@@ -276,7 +287,8 @@ def worker(host, cluster, config, args):
                 handle_exception("Syntax error for command '%s' in '%s' for cluster '%s': multiple must be either 'all' or 'any'" % (cmd_name, args.cluster_config, cluster), host, cluster)
         else:
             # default is 'all'
-            multiple = True 
+            multiple = True
+
         # split commands on 'cmd:', and filter out any empty elements
         cmd_segments = filter(bool, re.split("cmd:", tmp_command, flags=re.IGNORECASE))
 
@@ -466,7 +478,8 @@ class AsyncWorker:
                 pass
             except Exception as e:
 
-                l.exception(e, host, cluster)
+                if args.show_exception:
+                    l.exception(e, host, cluster)
 
                 # this indicates that a vital task has failed (erroraction==stop)
                 # or in case there was only one check at a command, then that one check failed
@@ -545,6 +558,10 @@ if __name__ == '__main__':
         loglevel = logging.INFO
     #l.setLevel(loglevel)
     logging.getLogger().setLevel(loglevel)
+    
+    # make paramiko shut up
+    logging.getLogger("paramiko").setLevel(logging.CRITICAL)
+
     # parse the cluster configuration
     try:
         taskmgr.read_configuration(args.cluster_config, ctype="cluster")
