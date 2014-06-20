@@ -34,7 +34,7 @@ def check(input_params):
         try:
             result = run("test -e /usr/bin/dpkg")
         except:
-            return True
+            return False
         if result.failed:
             raise RuntimeError("%s: Failed to execute remote command for detecting backend" % env.command)
         if result.return_code == 0:
@@ -54,7 +54,6 @@ def check(input_params):
 
 def check_package_dpkg(package, version):
     """ Do the actual http check, internal function, not exposed via @task """
-    
     try:
         with settings(combine_stderr=False):
             result = run("/usr/bin/dpkg -s %s" % package)

@@ -225,9 +225,11 @@ def worker(host, cluster, config, args):
     env.abort_on_prompts = True
     env.use_ssh_config = True
     if args.unsafe:
+        env.disable_known_hosts = True
         env.reject_unknown_hosts = False
         env.skip_bad_hosts = False
     else:
+        env.disable_known_hosts = False
         env.reject_unknown_hosts = True
         env.skip_bad_hosts = True
 
@@ -244,12 +246,24 @@ def worker(host, cluster, config, args):
     # command2: segment1 segment2 segment3
     for command, cmd_arguments in config["command"][args.command].items():
 
-        try: 
-            (action, cmd_name, erroraction) = command.split(" ")
-        except ValueError:
-            # erroraction was not provided
-            (action, cmd_name) = command.split(" ")
+        # some of the commands may have : in them, so we need to concatenate command and cmd_arguments, we'll split them up again later
+        command_concat = ":".join([command, cmd_arguments])
+
+        m = re.search("^(check|wait|execute)(?: (not))? ([^ :]+)(?::(.+))?(?: (skip|stop))?$", command_concat)
+
+        if m:
+            action, negate, cmd_name, cmd_arguments, erroraction = m.groups()
+        else:
+            raise AttributeError("Can't parse the command definition for command '%s' in '%s'" % (command, args.command_config), host, cluster)
+
+        if erroraction is None:
             erroraction = "stop"
+        
+        if negate is None:
+            negate = False
+        elif negate == "not":
+            negate = True
+
         erroractions_available = ["stop", "skip"]
         if not erroraction in erroractions_available:
             handle_exception("Error action '%s' for command '%s/%s %s' is unknown. Please use either of: %s" % (erroraction, args.command, action, cmd_name, ",".join(erroractions_available)))
@@ -271,7 +285,7 @@ def worker(host, cluster, config, args):
         # sanity check
         try:
             i = tmp_command.index('%ARGS%')
-            raise ValueError("Placeholder '%ARGS%' is used for command '%s', but no arguments are passed from commands.ini!" % (cmd_name), host, cluster)
+            raise ValueError("Placeholder '%ARGS%' is used for command '%s', but no arguments are passed from '%s'!" % (cmd_name, args.command_config), host, cluster)
         except:
             pass
 
@@ -298,6 +312,8 @@ def worker(host, cluster, config, args):
         if action == "check":
             try:
                 result = run_check_tasks(host, cluster, cmd_name, cmd_segments, multiple)
+                if negate:
+                    result = not result
             except Exception as e:
                 raise
             if not result:
