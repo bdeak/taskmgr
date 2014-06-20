@@ -132,7 +132,7 @@ class TaskMgr(object):
                 for host in f.readlines():
                     if re.search("(^\s*$|^#)", host):
                         continue
-                    if re.search(self.config["cluster"][cluster]["pattern"], host, re.IGNORECASE):
+                    if re.search(self.config["cluster"][cluster]["pattern"], host, flags=re.IGNORECASE):
                         hosts.append(host.rstrip())
             except Exception as e: 
                 handle_exception("Problem while reading host file '%s': %s" % (self.args.hosts_file, str(e)))
@@ -354,8 +354,12 @@ def worker(host, cluster, config, args):
     for command in config["command"][args.command].keys():
         #print "command is", command
         #print "running check %s for cluster %s" % (check_name, cluster)
-        (action, cmd_name, erroraction) = command.split(" ")
-        if not erroraction:
+        
+        try: 
+            (action, cmd_name, erroraction) = command.split(" ")
+        except ValueError:
+            # erroraction was not provided
+            (action, cmd_name) = command.split(" ")
             erroraction = "stop"
         erroractions_available = ["stop", "skip"]
         if not erroraction in erroractions_available:
@@ -367,19 +371,40 @@ def worker(host, cluster, config, args):
         # run the check, fail if result is false
         # remove all|any form the end
 
-        # split the command on spaces
-        cmd_segments = config["cluster"][cluster][cmd_name].split(" ")
-        # check if all|any is at the end, if yes, remove it
-
-        if cmd_segments[-1].lower() == "any" or cmd_segments[-1].lower() == "all":
-            if cmd_segments[-1].lower() == "any":
-                multiple = False
-            elif cmd_segments[-1].lower() == "all":
+        # split the command on 'cmd:'
+        # check if ' (all|any)$' matches the command
+        tmp_command = config["cluster"][cluster][cmd_name]
+        m = re.search("^(.*) (any|all)$", tmp_command, flags=re.IGNORECASE)
+        if m:
+            # found, set multiple, and remove it from the end of the string
+            tmp_command = m.group(1)
+            if m.group(2) == "all":
                 multiple = True
-            # remove it
-            cmd_segments.pop(-1)
+            elif m.group(2) == "any":
+                multiple = False
+            else:
+                handle_exception("Syntax error for command '%s' in '%s' for cluster '%s': multiple must be either 'all' or 'any'" % (cmd_name, args.cluster_config, cluster), host, cluster)
         else:
-            multiple = True
+            # default is 'all'
+            multiple = True 
+        # split commands on 'cmd:', and filter out any empty elements
+        cmd_segments = filter(bool, re.split("cmd:", tmp_command, flags=re.IGNORECASE))
+
+        # look for 'all|any' at the end of the 
+        # inspect the last segment, split it up
+
+        #cmd_segments = config["cluster"][cluster][cmd_name].split(" ")
+        ## check if all|any is at the end, if yes, remove it
+        #
+        #if cmd_segments[-1].lower() == "any" or cmd_segments[-1].lower() == "all":
+        #    if cmd_segments[-1].lower() == "any":
+        #        multiple = False
+        #    elif cmd_segments[-1].lower() == "all":
+        #        multiple = True
+        #    # remove it
+        #    cmd_segments.pop(-1)
+        #else:
+        #    multiple = True
 
         # call the commands
         # rule of thumb: on any failed check we return with false, meaning that the command failed
