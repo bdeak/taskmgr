@@ -6,6 +6,8 @@ from fabric import main as fabricmain
 from fabric import network as fabricnetwork
 from fabric.api import *
 
+import paramiko
+
 import utils.log
 import argparse
 import logging
@@ -17,6 +19,7 @@ import time
 import subprocess
 import re
 import signal
+import getpass
 
 import multiprocessing
 import Queue
@@ -45,8 +48,8 @@ class TaskMgr(object):
         # read cli arguments
         self.args = self.parse_cli_args()
         self.config = dict()
-        self.lock = None
         self.worker_pools = list()
+        self.ssh_config = None
 
     def get_arguments(self):
         return self.args
@@ -75,6 +78,7 @@ class TaskMgr(object):
         parser.add_argument("-d", "--debug", help="Show debug information", action="store_true", default=False)
         parser.add_argument("-x", "--unsafe", help="Enable unsafe operation. (disable host key checking, etc)", action='store_true', default=False)
         parser.add_argument("--show-exception", help="Show exception when tasks fail", action='store_true', default=False)
+        parser.add_argument("--ssh-config", help="The ssh configuration file to use.", default="%s/.ssh/config" % os.environ["HOME"])
         args = parser.parse_args()
         return args
 
@@ -116,6 +120,29 @@ class TaskMgr(object):
         # return a flattened list (instead of lists of lists)
         return sorted([item for sublist in hosts for item in sublist])
 
+
+    def read_ssh_config(self):
+        self.ssh_config = paramiko.config.SSHConfig()
+        self.ssh_config.parse(file(self.args.ssh_config))
+
+    def lookup_ssh_config_for_host(self, hostname):
+        if self.ssh_config is None:
+            self.read_ssh_config()
+        return self.ssh_config.lookup(hostname)
+
+    def get_ssh_users(self):
+        """ 
+        Go through the ssh cofig file and detect what users are used for connacting hosts
+        This will be needed to collect all the necessary passwords in advance
+        """
+        usernames = list()
+        with open(self.args.ssh_config) as f:
+            for line in f:
+                m = re.search("User ([^ ]+)", line, re.IGNORECASE)
+                if m:
+                    usernames.append(m.group(1).rstrip())
+        # while returning get rid of duplicates
+        return sorted(set(usernames))
 
 def handle_exception(exception, *args, **kwargs):
     global pid
@@ -233,14 +260,21 @@ def worker(host, cluster, config, args):
         env.reject_unknown_hosts = True
         env.skip_bad_hosts = True
 
+    # set the password for the given user in env.passwords
+    ssh_config = taskmgr.lookup_ssh_config_for_host(host)
+    try:
+        ssh_port = ssh_config["port"]
+    except:
+        ssh_port = 22
+    try:
+        ssh_user = ssh_config["user"]
+    except:
+        ssh_user = getpass.getuser()
+
+    env.passwords['%s@%s:%s' % (ssh_user, host, ssh_port)] = passwords[ssh_user]
+
     # ignore ctrl c here
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-
-    # make paramiko shut up
-    #logging.getLogger("paramiko").setLevel(logging.CRITICAL)
-    #logging.getLogger("paramiko").propagate = False
-    # create a lock object if it doesn't exist
-    #print "starting inside on %s" % host
 
     # command1: segment1 segment2 segment3
     # command2: segment1 segment2 segment3
@@ -552,6 +586,7 @@ taskmgr = object
 timeout = 10
 command_timeout = None
 pid = os.getpid()
+passwords = dict()
 
 # load available fabric task files 
 # http://stackoverflow.com/questions/23605418/in-fabric-how-can-i-execute-tasks-from-another-python-file
@@ -605,8 +640,22 @@ if __name__ == '__main__':
     if not args.command in config["command"].keys():
         handle_exception("Configuration in '%s' for command '%s' doesn't exist!" % (args.command_config, args.command))
 
+    if not os.path.exists(args.ssh_config):
+        handle_exception("Provided ssh config file '%s' doesn't exist!" % args.ssh_config)
+
     # count how many machines will be processed - for statistics later on
     nodelist = taskmgr.get_full_node_list()
+
+    # read the passwords for all users defined in ssh_config
+    # fabric would do this, but because of parallel execution it doesn't always work
+    users = taskmgr.get_ssh_users()
+    if not len(users):
+        # no users specified, use the current user
+        users.append(getpass.getuser())
+    else:
+       # read in the password for each user
+       for user in users:
+            passwords[user] = getpass.getpass("Please provide password for user '%s': " % user)
 
     # iterate on the provided cluster names
     for cluster in args.cluster_name:
