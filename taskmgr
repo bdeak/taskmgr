@@ -111,6 +111,8 @@ class TaskMgr(object):
         parser.add_argument("-x", "--unsafe", help="Enable unsafe operation. (disable host key checking, etc)", action='store_true', default=False)
         parser.add_argument("--show-exception", help="Show exception when tasks fail", action='store_true', default=False)
         parser.add_argument("--ssh-config", help="The ssh configuration file to use.", default="%s/.ssh/config" % os.environ["HOME"])
+        parser.add_argument("-f", "--force", help="Use force, like not asking confirmation for custom commands", action="store_true", default=False)
+
         args = parser.parse_args()
         return args
 
@@ -321,12 +323,12 @@ def worker(host, cluster, config, args):
         erroraction = "stop"
         multiple = True
         negate = None
-        if not command.find("cmd:") == -1:
+        if not command.find(" cmd:") == -1:
             # type 2)
 
             cmd_name = "direct"
 
-            m = re.search("^([^ ]+)(?: (not))? (cmd:[^\]]+)(?: \[([^\]]+)])?\s*$", command)
+            m = re.search("^([^ ]+)(?: (not))?( cmd:[^\]]+)(?: \[([^\]]+)])?\s*$", command)
             if m:
                 action = m.group(1)
                 negate = m.group(2)
@@ -355,7 +357,7 @@ def worker(host, cluster, config, args):
             elif negate == "not":
                 negate = True
 
-            cmd_segments = filter(bool, re.split("cmd:", tmp_command, flags=re.IGNORECASE))
+            cmd_segments = filter(bool, re.split(" cmd:", tmp_command, flags=re.IGNORECASE))
 
         else:
             # type 1)            
@@ -417,7 +419,7 @@ def worker(host, cluster, config, args):
                 multiple = True
     
             # split commands on 'cmd:', and filter out any empty elements
-            cmd_segments = filter(bool, re.split("cmd:", tmp_command, flags=re.IGNORECASE))
+            cmd_segments = filter(bool, re.split(" cmd:", tmp_command, flags=re.IGNORECASE))
 
         # call the commands
         # rule of thumb: on any failed check we return with false, meaning that the command failed
@@ -775,6 +777,44 @@ if __name__ == '__main__':
 
     if not args.command in config["command"].keys():
         handle_exception("Configuration in '%s' for command '%s' doesn't exist!" % (args.command_config, args.command))
+
+    # look at the parsed commands file for the requested command, and check for custom_cmd entries.
+    # if found, print them and ask for user confirmation (unless --force is used) before continuing
+    if not args.force:
+        custom_cmds = list()
+        for cmd in config["command"][args.command]:
+            if re.search("custom_cmd", cmd):
+                m = re.search("^([^ ]+)(?: (not))?( cmd:[^\]]+)(?: \[([^\]]+)])?\s*$", cmd)
+                if m:
+                    cmd_segments = filter(bool, re.split(" cmd:[^:]+:", m.group(3), flags=re.IGNORECASE))
+                    for segment in cmd_segments:
+                        with quiet():
+                            l.debug("calling with: %s" % segment)
+                            custom_cmds.append(execute("execute.custom_cmd.parse", segment, host="localhost")["localhost"][1])
+                else:
+                    # ask question, can't parse, might mean problems
+                    l.warning("Custom_cmd found, but failed to parse line.")
+                    custom.cmds.append(None)
+        if len(custom_cmds):
+            # there was at least custom command, or unparseable line
+
+            # get rid of unique elements
+            custom_cmds = set(custom_cmds)
+            l.warning("Warning: The following custom commands have been found that will be executed: ")
+            print ""
+            for cmd in custom_cmds:
+                print cmd
+            print ""
+            while True:
+                answer = raw_input("Are you sure you want to continue? [y/N]").rstrip("\n")
+                if not answer:
+                    l.info("User abort, exiting.")
+                    print ""
+                    sys.exit(1)
+                if answer == "y":
+                    l.info("User answered yes, going on")
+                    print ""
+                    break
 
     if not os.path.exists(args.ssh_config):
         handle_exception("Provided ssh config file '%s' doesn't exist!" % args.ssh_config)
