@@ -325,7 +325,6 @@ def worker(host, cluster, config, args):
         negate = None
         if not command.find(" cmd:") == -1:
             # type 2)
-
             cmd_name = "direct"
 
             m = re.search("^([^ ]+)(?: (not))?( cmd:[^\]]+)(?: \[([^\]]+)])?\s*$", command)
@@ -357,13 +356,11 @@ def worker(host, cluster, config, args):
             elif negate == "not":
                 negate = True
 
-            cmd_segments = filter(bool, re.split(" cmd:", tmp_command, flags=re.IGNORECASE))
+            cmd_segments = filter(bool, re.split(" ?cmd:", tmp_command, flags=re.IGNORECASE))
 
         else:
             # type 1)            
-
             m = re.search("^(check|wait|execute)(?: (not))? ([^ :]+)(?::(.+))?(?: \[(skip|stop)\])?$", command)
-    
             if m:
                 action, negate, cmd_name, cmd_arguments, erroraction = m.groups()
             else:
@@ -419,7 +416,7 @@ def worker(host, cluster, config, args):
                 multiple = True
     
             # split commands on 'cmd:', and filter out any empty elements
-            cmd_segments = filter(bool, re.split(" cmd:", tmp_command, flags=re.IGNORECASE))
+            cmd_segments = filter(bool, re.split(" ?cmd:", tmp_command, flags=re.IGNORECASE))
 
         # call the commands
         # rule of thumb: on any failed check we return with false, meaning that the command failed

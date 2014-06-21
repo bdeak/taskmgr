@@ -8,9 +8,6 @@ import utils.log
 l = logging.getLogger()
 l = utils.log.CustomLogAdapter(l, None)
 
-# hide parse from list
-#__all__ = ['custom_cmd']
-
 @task(default=True)
 def custom_cmd(input_params):
     """ Execute a custom command
