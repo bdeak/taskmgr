@@ -306,43 +306,47 @@ def worker(host, cluster, config, args):
         if not erroraction in erroractions_available:
             handle_exception("Error action '%s' for command '%s/%s %s' is unknown. Please use either of: %s" % (erroraction, args.command, action, cmd_name, ",".join(erroractions_available)))
         
-        # pair the check name with the one that is defined in the cluster configuration
-        if not cmd_name in config['cluster'][cluster]:
-            handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, cluster), host, cluster)
-        # run the check, fail if result is false
-        # remove all|any form the end
+        # execute commands doesn't have a pair in cluster.ini
+        if not action == "execute":
+            # not an execute command, check if a counterpart in cluster.ini exists
+            # pair the check name with the one that is defined in the cluster configuration
+            if not cmd_name in config['cluster'][cluster]:
+                handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, cluster), host, cluster)
+        
+            # run the check, fail if result is false
+            # remove all|any form the end
+    
+            # split the command on 'cmd:'
+            # check if ' (all|any)$' matches the command
+            tmp_command = config["cluster"][cluster][cmd_name]
 
-        # split the command on 'cmd:'
-        # check if ' (all|any)$' matches the command
-        tmp_command = config["cluster"][cluster][cmd_name]
+            # if arguments are passed from commands.ini, add them to tmp_command 
+            if not cmd_arguments is None:
+                tmp_command = tmp_command.replace('%ARGS%', cmd_arguments)
 
-        # if arguments are passed from commands.ini, add them to tmp_command 
-        if not cmd_arguments is None:
-            tmp_command = tmp_command.replace('%ARGS%', cmd_arguments)
-
-        # sanity check
-        try:
-            i = tmp_command.index('%ARGS%')
-            raise ValueError("Placeholder '%ARGS%' is used for command '%s', but no arguments are passed from '%s'!" % (cmd_name, args.command_config), host, cluster)
-        except:
-            pass
-
-        m = re.search("^(.*) (any|all)$", tmp_command, flags=re.IGNORECASE)
-        if m:
-            # found, set multiple, and remove it from the end of the string
-            tmp_command = m.group(1)
-            if m.group(2) == "all":
-                multiple = True
-            elif m.group(2) == "any":
-                multiple = False
+            # sanity check
+            try:
+                i = tmp_command.index('%ARGS%')
+                raise ValueError("Placeholder '%ARGS%' is used for command '%s', but no arguments are passed from '%s'!" % (cmd_name, args.command_config), host, cluster)
+            except:
+                pass
+    
+            m = re.search("^(.*) (any|all)$", tmp_command, flags=re.IGNORECASE)
+            if m:
+                # found, set multiple, and remove it from the end of the string
+                tmp_command = m.group(1)
+                if m.group(2) == "all":
+                    multiple = True
+                elif m.group(2) == "any":
+                    multiple = False
+                else:
+                    handle_exception("Syntax error for command '%s' in '%s' for cluster '%s': multiple must be either 'all' or 'any'" % (cmd_name, args.cluster_config, cluster), host, cluster)
             else:
-                handle_exception("Syntax error for command '%s' in '%s' for cluster '%s': multiple must be either 'all' or 'any'" % (cmd_name, args.cluster_config, cluster), host, cluster)
-        else:
-            # default is 'all'
-            multiple = True
-
-        # split commands on 'cmd:', and filter out any empty elements
-        cmd_segments = filter(bool, re.split("cmd:", tmp_command, flags=re.IGNORECASE))
+                # default is 'all'
+                multiple = True
+    
+            # split commands on 'cmd:', and filter out any empty elements
+            cmd_segments = filter(bool, re.split("cmd:", tmp_command, flags=re.IGNORECASE))
 
         # call the commands
         # rule of thumb: on any failed check we return with false, meaning that the command failed
@@ -377,6 +381,23 @@ def worker(host, cluster, config, args):
                 return (host, cluster, False)
             else:
                 l.info("%s '%s' OK" % (action, cmd_name), host, cluster)
+        
+        elif action == "execute":
+            try:
+                result = run_execute_tasks(host, cluster, cmd_name, cmd_arguments)
+                if negate:
+                    result = not result
+            except Exception as e:
+                raise
+            if not result:
+                l.error("%s '%s' failed" % (action, cmd_name), host, cluster)
+                if erroraction == "skip":
+                    l.warning("Error action for %s '%s' is 'skip', moving on with next host, but not stopping" % (action, cmd_name), host, cluster)
+                    return (host, cluster, False)
+                elif erroraction == "stop":
+                    raise StopException("Requested action for %s %s on %s/%s is '%s'" %(action, cmd_name, cluster, host, erroraction))
+            else:
+                l.info("%s '%s' OK" % (action, cmd_name), host, cluster)
 
         else:
             handle_exception("Unknown command '%s' defined in '%s'!" % (cmd_name, args.command_config), host, cluster)    
@@ -387,8 +408,6 @@ def worker(host, cluster, config, args):
 def run_check_tasks(host, cluster, cmd_name, cmd_segments, multiple):
     """ 
         A helper task called from worker() to execute a check task
-        This is needed so that multiple checks can be evaluated with a l.critical
-        AND condition
     """
     global timeout
     global command_timeout
@@ -429,6 +448,9 @@ def run_check_tasks(host, cluster, cmd_name, cmd_segments, multiple):
         return any(res == True for res in results)
 
 def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple, negate):
+    """ 
+    A helper task called from worker() to execute a wait task
+    """
     global timeout
     global command_timeout
     global callables
@@ -474,6 +496,33 @@ def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple, negate):
     #   * multiple is true
     #   * all waits have finished with success, no need to evaluate results
     return True
+
+def run_execute_tasks(host, cluster, cmd_name, cmd_arguments):
+    """ 
+        A helper task called from worker() to execute an 'execute' task
+    """
+    global timeout
+    global command_timeout
+    global callables
+
+    results = list()
+    task_name = "execute.%s" % cmd_name
+    if not task_name in fabricmain._task_names(callables):
+        raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % task_name)
+
+    try: 
+        l.debug("Executing '%s %s'" % (cmd_name, cmd_arguments), host, cluster)
+        with quiet():
+            result = execute(task_name, cmd_arguments, hosts=[host])
+    except Exception as e:
+        raise TaskRunException("Failed to run execute fabric task '%s' on host '%s' (cluster '%s'): %s" % (cmd_name, host, cluster, str(e)))
+
+    # got the result, good
+    if result[host]:
+        return True
+    else:
+        return False
+
 
 # due to a possible bug in the signal handling of multiprocessing's Pool implementation
 # we need our own pool management

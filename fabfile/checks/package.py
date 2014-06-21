@@ -15,40 +15,34 @@ def check(input_params):
         Can support multiple backends 
 
         input_params parameter is a string, with the following fields:
-        package:version:backend
+        package:version
 
-        Available backends:
-            dpkg
-
-        If the backend is not provided, it will be autodetected.
+        The backend to be used for package management is autodetected.
+        For adapting to various systems this needs to be extended.
     """
     # split up the input_params, and make sense of it
-    m = re.search("^([^:]+)(?::([^:]+))?(:?[^:]+)?$", input_params)
+    m = re.search("^([^:]+)(?::(.+))?$", input_params)
     if not m:
         raise AttributeError("The given input_params '%s' doesn't match the requirements!" % input_params)
     package = m.group(1)
     version = m.group(2) if m.group(2) else None
-    backend = m.group(3) if m.group(3) else None
 
-    if backend is None:
-        try:
-            result = run("test -e /usr/bin/dpkg")
-        except:
-            return False
-        if result.failed:
-            raise RuntimeError("%s: Failed to execute remote command for detecting backend" % env.command)
-        if result.return_code == 0:
-            backend = "dpkg"
-        else:
-            # check for other backends - note yet implemented    
-            raise SystemError("%s: only backend 'dpkg' is currently supported." % env.command)
+    try:
+        result = run("test -e /usr/bin/dpkg")
+    except:
+        return False
+    if result.failed:
+        raise RuntimeError("%s: Failed to execute remote command for detecting backend" % env.command)
+    if result.return_code == 0:
+        backend = "dpkg"
     else:
-        pass
+        # check for other backends - note yet implemented    
+        raise SystemError("%s: only backend 'dpkg' is currently supported." % env.command)
 
     backends = { 'dpkg': check_package_dpkg }
 
     if not backend in backends.keys():
-        raise ValueError("detected/provided backend '%s' is not allowed!" % backend) 
+        raise ValueError("function for detected backend '%s' is not found!" % backend) 
 
     return backends[backend](package, version)
 
