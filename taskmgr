@@ -63,6 +63,38 @@ class TaskMgr(object):
             raise OperationException("Failed to read type '%s' config file %s: %s" % (ctype, configfile, str(e)))
         self.config[ctype] = config._sections
 
+    def read_commands_file(self, configfile, ctype):
+        """
+        A simple replacement for configparser, because commands.ini has a different syntax, and ConfigParser
+        in python 2.7 doesn't allow to change the delimiter when parsing a config file
+        This will read every line in each section and return them within a dict, key names are the sections, values are lists of the lines
+        This allows handling lines which are exactly the same (if one goes crazy with the configuration)
+        """
+        if not os.path.exists(configfile):
+            handle_exception("Provided commands file '%s' doesn't exist!" % configfile)
+        section = None
+        config = dict()
+        with open(configfile) as f:
+            for line in f:
+                line = line.rstrip()
+                if re.search("^[#;]", line):
+                    continue
+                if re.search("^\s*$", line):
+                    continue
+                m = re.search("^\[([^\]]+)]\s*$", line)
+                if m:
+                    section = m.group(1)
+                    continue
+                else:
+                    if section is None:
+                        raise OperationException("Can't parse config file '%s': data without section has been found." % 'configfile')
+                    else:
+                        if not section in config.keys():
+                            config[section] = list()
+                        # store every line as keys, value is None, as we don't have key/value pairs
+                        config[section].append(line)
+        self.config[ctype] = config
+
     def get_configuration(self, ctype):
         return self.config[ctype]
     
@@ -278,37 +310,76 @@ def worker(host, cluster, config, args):
 
     # command1: segment1 segment2 segment3
     # command2: segment1 segment2 segment3
-    for command in config["command"][args.command].keys():
+    for command in config["command"][args.command]:
 
-        # some of the commands may have : in them, so we need to concatenate command and cmd_arguments, we'll split them up again later
-        if not config["command"][args.command][command] is None:
-            cmd_arguments = config["command"][args.command][command]
-            command_concat = ":".join([command, cmd_arguments])
+        # there are two types of input in commands.ini:
+        # 1) check|wait|execute [not] command[:arguments] [skip|stop] (default: stop)
+        # 2) check|wait|execute [not] cmd:task.name:arguments [cmd:task.name2:arguments] [skip|stop,all|any]
+
+        # parse these two differently
+        # check if 2) matches (:cmd)
+        erroraction = "stop"
+        multiple = True
+        negate = None
+        if not command.find("cmd:") == -1:
+            # type 2)
+
+            cmd_name = "direct"
+
+            m = re.search("^([^ ]+)(?: (not))? (cmd:[^\]]+)(?: \[([^\]]+)])?\s*$", command)
+            if m:
+                action = m.group(1)
+                negate = m.group(2)
+                tmp_command = m.group(3)
+                flags = m.group(4)
+                if not flags is None:
+                    flags = flags.split(",")
+                    if "skip" in flags:
+                        erroraction = "skip"
+                    if "stop" in flags:
+                        erroraction = "stop"
+                    if "skip" in flags and "stop" in flags:
+                        handle_exception("Providing both 'skip' and 'stop' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
+                    if "all" in flags:
+                        multiple = True
+                    if "any" in flags:
+                        multiple = False
+                    if "any" in flags and "all" in flags:
+                        handle_exception("Providing both 'any' and 'all' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
+
+            else:
+                handle_exception("Can't parse command '%s/%s'" % (args.command, command), host, cluster)
+
+            if negate is None:
+                negate = False
+            elif negate == "not":
+                negate = True
+
+            cmd_segments = filter(bool, re.split("cmd:", tmp_command, flags=re.IGNORECASE))
+
         else:
-            command_concat = command
+            # type 1)            
 
-        m = re.search("^(check|wait|execute)(?: (not))? ([^ :]+)(?::(.+))?(?: (skip|stop))?$", command_concat)
-
-        if m:
-            action, negate, cmd_name, cmd_arguments, erroraction = m.groups()
-        else:
-            raise AttributeError("Can't parse the command definition for command '%s' in '%s'" % (command, args.command_config), host, cluster)
-
-        if erroraction is None:
-            erroraction = "stop"
+            m = re.search("^(check|wait|execute)(?: (not))? ([^ :]+)(?::(.+))?(?: \[(skip|stop)\])?$", command)
+    
+            if m:
+                action, negate, cmd_name, cmd_arguments, erroraction = m.groups()
+            else:
+                raise AttributeError("Can't parse the command definition for command '%s' in '%s'" % (command, args.command_config), host, cluster)
+    
+            if erroraction is None:
+                erroraction = "stop"
+            
+            if negate is None:
+                negate = False
+            elif negate == "not":
+                negate = True
+    
+            erroractions_available = ["stop", "skip"]
+            if not erroraction in erroractions_available:
+                handle_exception("Error action '%s' for command '%s/%s %s' is unknown. Please use either of: %s" % (erroraction, args.command, action, cmd_name, ",".join(erroractions_available)))
         
-        if negate is None:
-            negate = False
-        elif negate == "not":
-            negate = True
-
-        erroractions_available = ["stop", "skip"]
-        if not erroraction in erroractions_available:
-            handle_exception("Error action '%s' for command '%s/%s %s' is unknown. Please use either of: %s" % (erroraction, args.command, action, cmd_name, ",".join(erroractions_available)))
-        
-        # execute commands doesn't have a pair in cluster.ini
-        if not action == "execute":
-            # not an execute command, check if a counterpart in cluster.ini exists
+            # check if a counterpart in cluster.ini exists
             # pair the check name with the one that is defined in the cluster configuration
             if not cmd_name in config['cluster'][cluster]:
                 handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, cluster), host, cluster)
@@ -361,7 +432,7 @@ def worker(host, cluster, config, args):
             if not result:
                 l.error("%s '%s' failed" % (action, cmd_name), host, cluster)
                 if erroraction == "skip":
-                    l.warning("Error action for %s '%s' is 'skip', moving on with next host, but not stopping" % (action, cmd_name), host, cluster)
+                    l.warning("Error action for %s '%s' is 'skip', moving on with next host" % (action, cmd_name), host, cluster)
                     return (host, cluster, False)
                 elif erroraction == "stop":
                     raise StopException("Requested action for %s %s on %s/%s is '%s'" %(action, cmd_name, cluster, host, erroraction))
@@ -384,7 +455,7 @@ def worker(host, cluster, config, args):
         
         elif action == "execute":
             try:
-                result = run_execute_tasks(host, cluster, cmd_name, cmd_arguments)
+                result = run_execute_tasks(host, cluster, cmd_name, cmd_segments, multiple)
                 if negate:
                     result = not result
             except Exception as e:
@@ -414,8 +485,8 @@ def run_check_tasks(host, cluster, cmd_name, cmd_segments, multiple):
     global callables
     results = list()
     for cmd in cmd_segments:
-        check_name = cmd.split(":")[0]
-        check_arguments = ":".join(cmd.split(":")[1:])
+        check_name = cmd.split(":")[0].rstrip()
+        check_arguments = ":".join(cmd.split(":")[1:]).rstrip()
         if not check_name in fabricmain._task_names(callables):
             raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % check_name)
 
@@ -458,8 +529,8 @@ def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple, negate):
     results = list()
 
     for cmd in cmd_segments:
-        check_name = cmd.split(":")[0]
-        check_arguments = ":".join(cmd.split(":")[1:])
+        check_name = cmd.split(":")[0].rstrip()
+        check_arguments = ":".join(cmd.split(":")[1:]).rstrip()
         # check if a given fabric task exists
         if not check_name in fabricmain._task_names(callables):
             raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % check_name)
@@ -497,31 +568,47 @@ def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple, negate):
     #   * all waits have finished with success, no need to evaluate results
     return True
 
-def run_execute_tasks(host, cluster, cmd_name, cmd_arguments):
+def run_execute_tasks(host, cluster, cmd_name, cmd_segments, multiple):
     """ 
         A helper task called from worker() to execute an 'execute' task
     """
     global timeout
     global command_timeout
     global callables
-
     results = list()
-    task_name = "execute.%s" % cmd_name
-    if not task_name in fabricmain._task_names(callables):
-        raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % task_name)
+    for cmd in cmd_segments:
+        check_name = cmd.split(":")[0].rstrip()
+        check_arguments = ":".join(cmd.split(":")[1:]).rstrip()
+        if not check_name in fabricmain._task_names(callables):
+            raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % check_name)
 
-    try: 
-        l.debug("Executing '%s %s'" % (cmd_name, cmd_arguments), host, cluster)
-        with quiet():
-            result = execute(task_name, cmd_arguments, hosts=[host])
-    except Exception as e:
-        raise TaskRunException("Failed to run execute fabric task '%s' on host '%s' (cluster '%s'): %s" % (cmd_name, host, cluster, str(e)))
+        try: 
+            l.debug("Executing check %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
+            with quiet():
+                result = execute(check_name, check_arguments, hosts=[host])
+        except Exception as e:
+            raise TaskRunException("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
 
-    # got the result, good
-    if result[host]:
-        return True
+        # got the result, good
+        if multiple:
+            if result[host]:
+                results.append(result[host])
+                continue
+            else:
+                return False
+        else:
+            if result[host]:
+                return True
+            else:
+                continue
+                results.append(result[host])
+    # if we are here all of the checks have been run
+    # either because multiple is True, or because multiple is False, but
+    # the first checks failed
+    if multiple:
+        return all(res == True for res in results)
     else:
-        return False
+        return any(res == True for res in results)
 
 
 # due to a possible bug in the signal handling of multiprocessing's Pool implementation
@@ -680,7 +767,7 @@ if __name__ == '__main__':
 
     # parse the command configuration
     try:
-        taskmgr.read_configuration(args.command_config, ctype="command", allow_no_value=True)
+        taskmgr.read_commands_file(args.command_config, ctype="command")
     except OperationException as e:
         handle_exception(e)
     # get the parsed configuration in the form of a dict
