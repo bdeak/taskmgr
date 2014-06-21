@@ -583,7 +583,7 @@ def run_execute_tasks(host, cluster, cmd_name, cmd_segments, multiple):
             raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % check_name)
 
         try: 
-            l.debug("Executing check %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
+            l.debug("Executing %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
             with quiet():
                 result = execute(check_name, check_arguments, hosts=[host])
         except Exception as e:
