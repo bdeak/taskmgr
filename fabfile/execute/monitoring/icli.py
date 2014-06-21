@@ -9,7 +9,7 @@ l = logging.getLogger()
 l = utils.log.CustomLogAdapter(l, None)
 
 @task(default=True)
-def icli(input_params):
+def icli(input_params, cluster):
     """ Enable/Disable monitoring for a given host using icli (internal tool)
 
         input_params parameter is a string, with the following fields:
@@ -19,9 +19,8 @@ def icli(input_params):
         This command is run on the local machine, therefore the icli command must be available.
     """
     # split up the input_params, and make sense of it
-    m = re.search("^(enable|disable)$", input_params)
-    if m:
-        action = m.group(1)
+    if re.search("^(enable|disable)$", input_params):
+        action = input_params
     else:
         raise AttributeError("The given input_params '%s' doesn't match the requirements!" % input_params)
 

@@ -10,7 +10,7 @@ l = logging.getLogger()
 l = utils.log.CustomLogAdapter(l, None)
 
 @task(default=True)
-def reboot(input_params):
+def reboot(input_params, cluster):
     """ Reboot the target system
 
         input_params parameter is a string, with the following fields:

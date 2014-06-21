@@ -25,7 +25,7 @@ import multiprocessing
 import Queue
 
 
-__version__ = "0.0.2"
+__version__ = "0.5.0"
 
 class OperationException(Exception):
     pass
@@ -492,7 +492,7 @@ def run_check_tasks(host, cluster, cmd_name, cmd_segments, multiple):
         try: 
             l.debug("Executing check %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
             with quiet():
-                result = execute(check_name, check_arguments, hosts=[host])
+                result = execute(check_name, check_arguments, cluster, hosts=[host])
         except Exception as e:
             raise TaskRunException("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
 
@@ -540,7 +540,7 @@ def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple, negate):
             try:
                 l.debug("Executing wait %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
                 with quiet():             
-                    result = execute(check_name, check_arguments, hosts=[host])
+                    result = execute(check_name, check_arguments, cluster, hosts=[host])
                     if negate:
                         result[host] = not result[host]
             except Exception as e:
@@ -584,7 +584,7 @@ def run_execute_tasks(host, cluster, cmd_name, cmd_segments, multiple):
         try: 
             l.debug("Executing %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
             with quiet():
-                result = execute(check_name, check_arguments, hosts=[host])
+                result = execute(check_name, check_arguments, cluster, hosts=[host])
         except Exception as e:
             raise TaskRunException("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
 

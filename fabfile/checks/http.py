@@ -6,7 +6,7 @@ import urllib
 import urllib2
 
 @task(default=True)
-def check(input_params):
+def check(input_params, cluster):
     """ Check a HTTP or HTTPS service
         input_params parameter is a string, with the following fields:
         url:HTTP_STATUS|pattern[POST:value1=x,value2=y]

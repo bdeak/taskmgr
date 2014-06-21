@@ -10,7 +10,7 @@ l = logging.getLogger()
 l = utils.log.CustomLogAdapter(l, None)
 
 @task(default=True)
-def check(input_params):
+def check(input_params, cluster):
     """ Install a given version of a given package
         Can support multiple backends 
 

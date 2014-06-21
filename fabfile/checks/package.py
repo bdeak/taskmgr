@@ -10,7 +10,7 @@ l = logging.getLogger()
 l = utils.log.CustomLogAdapter(l, None)
 
 @task(default=True)
-def check(input_params):
+def check(input_params, cluster):
     """ Check the version of a given package
         Can support multiple backends 
 
@@ -44,9 +44,9 @@ def check(input_params):
     if not backend in backends.keys():
         raise ValueError("function for detected backend '%s' is not found!" % backend) 
 
-    return backends[backend](package, version)
+    return backends[backend](package, version, cluster)
 
-def check_package_dpkg(package, version):
+def check_package_dpkg(package, version, cluster):
     """ Do the actual http check, internal function, not exposed via @task """
     try:
         with settings(combine_stderr=False):
@@ -70,7 +70,7 @@ def check_package_dpkg(package, version):
             if found_version == version:
                 return True
             else:
-                l.debug("Version for package '%s' is '%s'" % (package, version), env.host_string)
+                l.debug("Version for package '%s' is '%s'" % (package, version), env.host_string, cluster)
                 return False
         except:
             continue

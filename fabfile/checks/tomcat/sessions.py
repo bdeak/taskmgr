@@ -14,7 +14,7 @@ l = logging.getLogger()
 l = utils.log.CustomLogAdapter(l, None)
 
 @task(default=True)
-def check(input_params):
+def check(input_params, cluster):
     """ Check the number of Tomcat sessions using multiple backends.
         The available backend is Jolokia, but can be extended to support plain JMX.
 

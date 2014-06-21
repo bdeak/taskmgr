@@ -9,7 +9,7 @@ l = logging.getLogger()
 l = utils.log.CustomLogAdapter(l, None)
 
 @task(default=True)
-def custom_cmd(input_params):
+def custom_cmd(input_params, cluster):
     """ Execute a custom command
 
         input_params parameter is a string, with the following fields:
@@ -28,13 +28,13 @@ def custom_cmd(input_params):
     # run _any_ command. Very dangerous. You have been warned!
     if with_sudo is None:
         try:
-            l.debug("Executing: '%s'" % command)
+            l.debug("Executing: '%s'" % command, env.host_string, cluster)
             result = run(command)
         except:
             return False
     else:
         try:
-            l.debug("Executing via sudo: '%s'" % command)
+            l.debug("Executing via sudo: '%s'" % command, env.host_string, cluster)
             result = sudo(command)
         except Exception as e:
             return False
