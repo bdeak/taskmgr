@@ -10,7 +10,7 @@ l = utils.log.CustomLogAdapter(l, None)
 
 @task(default=True)
 def icli(input_params, cluster):
-    """ Enable/Disable monitoring for a given host using icli (internal tool)
+    """ Enable/Disable monitoring for a given host using icli (fixme: url for icli on github)
 
         input_params parameter is a string, with the following fields:
         enable|disable

@@ -5,7 +5,8 @@ import re
 
 @task(default=True)
 def check(input_params, cluster):
-    """ Check if a given TCP port is open
+    """ Check if a given TCP or UDP port is open using a simple connect check (for TCP)
+    
         input_params parameter is a string, with the following fields:
         port:tcp|udp
     """
