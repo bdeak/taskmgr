@@ -26,7 +26,6 @@ def check(input_params, cluster):
                 jolokia_user:           The user to use when authenticating to Jolokia
                 jolokia_password:       The pasword to use when authenticating to Jolokia
                 jolokia_url:            must be a fully qualified url, with protocol, port (if not the default should be used), and context path
-                                        the replacement string %HOST% can be used to represent the hostname of the given machine
                 application_context:    The context of the application for which the session information should be fetched
                 <|>                     The direction of the comparison to do between the current sessions and the session number
                                         provided as an argument
@@ -38,8 +37,8 @@ def check(input_params, cluster):
         Note: URL _MUST_ contain the jolokia context, at least a '/'
 
         Example:
-            http://jolokia:jolokia@%HOST%:8080/jolokia:/:<:2000
-            http://jolokia:jolokia@%HOST%:8080/jolokia:/my-app:>:10:jolokia
+            http://jolokia:jolokia@hostname:8080/jolokia:/:<:2000
+            http://jolokia:jolokia@hostname:8080/jolokia:/my-app:>:10:jolokia
 
     """
     # split up the input_params, and make sense of it
@@ -57,7 +56,7 @@ def check(input_params, cluster):
     if backend is None:
         backend = "jolokia"
 
-    url = ("%s%s" % (protocol, url_segment)).replace('%HOST%', env.host_string)
+    url = "%s%s" % (protocol, url_segment)
     session_num = int(session_num)
 
     backends = { 'jolokia': check_sessions_jolokia }

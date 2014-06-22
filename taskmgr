@@ -87,7 +87,7 @@ class TaskMgr(object):
                     continue
                 else:
                     if section is None:
-                        raise OperationException("Can't parse config file '%s': data without section has been found." % 'configfile')
+                        raise OperationException("Can't parse config file '%s': data without section has been found." % configfile)
                     else:
                         if not section in config.keys():
                             config[section] = list()
@@ -100,18 +100,21 @@ class TaskMgr(object):
     
     def parse_cli_args(self):
         # parse command line arguments
-        parser = argparse.ArgumentParser()
-        parser.add_argument("-v", "--version", action="version", version=__version__)
-        parser.add_argument("--cluster-config", help="The location of the cluster configuration file", default="cluster.ini")
-        parser.add_argument("--command-config", help="The location of the cluster configuration file", default="commands.ini")
-        parser.add_argument("-H", "--hosts-file", help="File storing the hosts to work on, one by line. If not used, the hostnames from cluster.ini are used.") # fixme
-        parser.add_argument("-n", "--cluster-name", help="The name of the cluster to work on. Can be provided multiple times.", action='append', required=True)
-        parser.add_argument("-c", "--command", help="THe name of the command to run", required=True)
-        parser.add_argument("-d", "--debug", help="Show debug information", action="store_true", default=False)
-        parser.add_argument("-x", "--unsafe", help="Enable unsafe operation. (disable host key checking, etc)", action='store_true', default=False)
-        parser.add_argument("--show-exception", help="Show exception when tasks fail", action='store_true', default=False)
-        parser.add_argument("--ssh-config", help="The ssh configuration file to use.", default="%s/.ssh/config" % os.environ["HOME"])
-        parser.add_argument("-f", "--force", help="Use force, like not asking confirmation for custom commands", action="store_true", default=False)
+        parser = argparse.ArgumentParser(add_help=False)
+        mandatory = parser.add_argument_group(title='Mandatory arguments')
+        mandatory.add_argument("-n", "--cluster-name", help="The name of the cluster to work on. Can be provided multiple times.", action='append', required=True)
+        mandatory.add_argument("-c", "--command", help="THe name of the command to run", required=True)
+        optional = parser.add_argument_group(title='Optional arguments')
+        optional.add_argument("--cluster-config", help="The location of the cluster configuration file", default="cluster.ini")
+        optional.add_argument("--command-config", help="The location of the command configuration file", default="commands.ini")
+        optional.add_argument("-H", "--hosts-file", help="File storing the hosts to work on, one by line. If not used, the hostnames from cluster.ini are used.") # fixme
+        optional.add_argument("-d", "--debug", help="Show debug information", action="store_true", default=False)
+        optional.add_argument("-x", "--unsafe", help="Enable unsafe operation. (disable host key checking, etc)", action='store_true', default=False)
+        optional.add_argument("--show-exception", help="Show exception when tasks fail", action='store_true', default=False)
+        optional.add_argument("--ssh-config", help="The ssh configuration file to use.", default="%s/.ssh/config" % os.environ["HOME"])
+        optional.add_argument("-f", "--force", help="Use force, like not asking confirmation for custom commands", action="store_true", default=False)
+        optional.add_argument("-v", "--version", action="version", version=__version__)
+        optional.add_argument("-h", "--help", help="Show this help", action="help")
 
         args = parser.parse_args()
         return args
@@ -327,6 +330,9 @@ def worker(host, cluster, config, args):
             # type 2)
             cmd_name = "direct"
 
+            # do a search and replace for placeholder '%HOST%'
+            command.replace("%HOST%", host)
+
             m = re.search("^([^ ]+)(?: (not))?( cmd:[^\]]+)(?: \[([^\]]+)])?\s*$", command)
             if m:
                 action = m.group(1)
@@ -388,7 +394,7 @@ def worker(host, cluster, config, args):
     
             # split the command on 'cmd:'
             # check if ' (all|any)$' matches the command
-            tmp_command = config["cluster"][cluster][cmd_name]
+            tmp_command = config["cluster"][cluster][cmd_name].replace("%HOST%", host)
 
             # if arguments are passed from commands.ini, add them to tmp_command 
             if not cmd_arguments is None:
@@ -401,7 +407,7 @@ def worker(host, cluster, config, args):
             except:
                 pass
     
-            m = re.search("^(.*) (any|all)$", tmp_command, flags=re.IGNORECASE)
+            m = re.search("^(.*) \[(any|all)\]$", tmp_command, flags=re.IGNORECASE)
             if m:
                 # found, set multiple, and remove it from the end of the string
                 tmp_command = m.group(1)

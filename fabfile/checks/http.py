@@ -14,7 +14,6 @@ def check(input_params, cluster):
         Parameters:
             Mandatory:
                 url: must be a fully qualified url, with protocol, port (if not the default should be used), and context path
-                     the replacement string %HOST% can be used to represent the hostname of the given machine
 
                 HTTP_STATUS: numeric value of the desirec http status in the response
                 pattern: a regex pattern to look for in the response
@@ -27,8 +26,8 @@ def check(input_params, cluster):
         Note: URL _MUST_ contain context, at least a '/'
 
         Example:
-            http://%HOST%:8080/:200
-            http://%HOST%/index.html:some text
+            http://hostname:8080/:200
+            http://hostname/index.html:some text
             http://some-virtual-host:8090/cgi-bin/login.cgi:SUCCESS:POST:user=some_user,password=some_password
 
         Fixme:
@@ -36,12 +35,12 @@ def check(input_params, cluster):
 
     """
     # split up the input_params, and make sense of it
-    m = re.search("^(https?://(?:[a-zA-Z0-9._-]+|%HOST%)(?::[0-9]+)?/[^:]*):(.+(?!POST:.+)$|.+:POST:(?:[^=]+:[^=]+:?)+)", input_params)
+    m = re.search("^(https?://[a-zA-Z0-9._-]+(?::[0-9]+)?/[^:]*):(.+(?!POST:.+)$|.+:POST:(?:[^=]+:[^=]+:?)+)", input_params)
     if not m:
         raise AttributeError("The given input_params '%s' doesn't match the requirements!" % input_params)
     
     # parse input
-    url = m.group(1).replace('%HOST%', env.host_string)
+    url = m.group(1)
     required_result = m.group(2)
     m = re.search("^(.+):POST:(.+)", required_result, flags=re.IGNORECASE)
     post_data = dict()
