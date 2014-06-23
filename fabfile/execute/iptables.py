@@ -99,7 +99,19 @@ def detect_local_ipaddress():
     result = None
     try:
         with quiet():
-            result = local("hostname -f")
+			result = local("hostname -I", capture=True)
+			ips = list()
+			for ip in result.split(" "):
+				try:
+					socket.inet_aton(ip)
+					ips.append(ip)
+				except:
+					continue
+			if len(ips):
+				return ips
+			else:
+				raise RuntimeError("%s: failed to detect IP address via 'hostname -I'!" % env.command)
+			return ips
     except:
         pass
     
@@ -116,12 +128,4 @@ def detect_local_ipaddress():
             return result.split("\n")
         else:
             raise RuntimeError("%s: failed to detect IP address for local machine" % env.command)
-
-    else:
-        # do a dns lookup for the hostname
-        try:
-            ip = socket.gethostbyname(result[env.host_string])
-        except Exception as e:
-            raise RuntimeError("%s: failed to lookup IP address for local machine's hostname '%s': %s" % (env.command, result, str(e)))
-        return [ ip ]
 

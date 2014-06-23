@@ -175,6 +175,8 @@ class TaskMgr(object):
         usernames = list()
         with open(self.args.ssh_config) as f:
             for line in f:
+            	if re.search("^\s*#", line):
+            		continue
                 m = re.search("User ([^ ]+)", line, re.IGNORECASE)
                 if m:
                     usernames.append(m.group(1).rstrip())
@@ -370,7 +372,7 @@ def worker(host, cluster, config, args):
             if m:
                 action, negate, cmd_name, cmd_arguments, erroraction = m.groups()
             else:
-                raise AttributeError("Can't parse the command definition for command '%s' in '%s'" % (command, args.command_config), host, cluster)
+                raise AttributeError("Can't parse the command definition for command '%s' in '%s'" % (command, args.command_config))
     
             if erroraction is None:
                 erroraction = "stop"
@@ -496,7 +498,7 @@ def run_check_tasks(host, cluster, cmd_name, cmd_segments, multiple):
             raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % check_name)
 
         try: 
-            l.debug("Executing check %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
+            l.info("Executing check %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
             with quiet():
                 result = execute(check_name, check_arguments, cluster, hosts=[host])
         except Exception as e:
@@ -544,7 +546,7 @@ def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple, negate):
         while True:
             # this loop is needed to ensure we wait until the check is finally ok
             try:
-                l.debug("Executing wait %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
+                l.info("Executing wait %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
                 with quiet():             
                     result = execute(check_name, check_arguments, cluster, hosts=[host])
                     if negate:
@@ -558,7 +560,7 @@ def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple, negate):
             else:
                 # failed, have to wait longer
                 l.debug("Waiting before retrying", host, cluster)
-                time.sleep(5)
+                time.sleep(10)
                 continue
         # we are here, so there was a successful result
         if multiple == False:
@@ -588,7 +590,7 @@ def run_execute_tasks(host, cluster, cmd_name, cmd_segments, multiple):
             raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % check_name)
 
         try: 
-            l.debug("Executing %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
+            l.info("Executing %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
             with quiet():
                 result = execute(check_name, check_arguments, cluster, hosts=[host])
         except Exception as e:
@@ -677,8 +679,10 @@ class AsyncWorker:
                 pass
             except Exception as e:
 
-                if args.show_exception:
+            	if args.show_exception:
                     l.exception(e, host, cluster)
+                else:
+					l.critical("Running task failed with exception: %s" % e, host, cluster)
 
                 # this indicates that a vital task has failed (erroraction==stop)
                 # or in case there was only one check at a command, then that one check failed

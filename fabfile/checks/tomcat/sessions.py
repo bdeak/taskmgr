@@ -80,7 +80,6 @@ def check_sessions_jolokia(url, operation, session_num, context, username=None, 
     try:
         response = urllib2.urlopen(req)
     except (urllib2.URLError, urllib2.HTTPError) as e:
-        print e.geturl()
         return False
 
     # the request succeeded, inspect the result

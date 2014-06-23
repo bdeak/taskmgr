@@ -82,6 +82,11 @@ def check_http(url, method, required_result, post_data):
                 return False
         else:
             return False
+    except socket.timeout:
+    	# timeout should not be considered fatal
+    	return False
+    except Exception as e:
+    	raise RuntimeError("Fatal problem occured while fetching result for '%s': %s" % (url, str(e)))
 
     # the request succeeded, inspect the result
     if required_result_numeric:
