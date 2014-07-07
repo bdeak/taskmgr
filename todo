@@ -3,4 +3,7 @@ fix logging with multiprocessing -> allegedly needs locking
 implement icmp check
 make wait time a parameter
 when waiting with 'any', iterate between the checks, to give a chance to all of them to return a true value
-add empty check that will return always with true (and again for fals for testing?), so same command can be used for clsuters which doesn't have some functionality (check_sessions = always_true for session-less services)
+add empty check that will return always with true (and again for fals for testing?), so same command can be used for clsuters which doesn't have some functionality (
+
+done:
+check_sessions = always_true for session-less services)
