@@ -42,6 +42,9 @@ class NoSuchTaskException(Exception):
 class StopException(Exception):
     pass
 
+class TaskTimeoutException(Exception):
+    pass
+
 class TaskMgr(object):
 
     def __init__(self):
@@ -533,47 +536,97 @@ def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple, negate):
     global command_timeout
     global callables
 
-    results = list()
+    results = dict()
 
-    for cmd in cmd_segments:
+    segment_index = 0
+    counter = 1
+    while True:
+        cmd = cmd_segments[segment_index]
         check_name = cmd.split(":")[0].rstrip()
         check_arguments = ":".join(cmd.split(":")[1:]).rstrip()
         # check if a given fabric task exists
         if not check_name in fabricmain._task_names(callables):
             raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % check_name)
 
-        l.debug("Starting wait %s: '%s %s' returns..." % (cmd_name, check_name, check_arguments), host, cluster)
-        while True:
-            # this loop is needed to ensure we wait until the check is finally ok
-            try:
-                l.info("Executing wait %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
-                with quiet():             
-                    result = execute(check_name, check_arguments, cluster, hosts=[host])
-                    if negate:
-                        result[host] = not result[host]
-            except Exception as e:
-                raise TaskRunException("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
-            if result[host] == True:
-                # break out of while True
-                l.debug("Got response, moving on", host, cluster)
-                break
-            else:
-                # failed, have to wait longer
-                l.debug("Waiting before retrying", host, cluster)
-                time.sleep(10)
-                continue
-        # we are here, so there was a successful result
-        if multiple == False:
-            # we can return at this point
-            return True
+        l.debug("Starting wait %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
+
+        # if there is only one check, don't use the timeout for iteration, but wait until it get's OK
+        if len(cmd_segments) > 1:
+            wait_timeout = 60
         else:
-            results.append(True)
-        if not len(results) < len(cmd_segments):
+            wait_timeout = None
+
+        try:
+            result = run_wait_task_helper(host, cluster, check_name, check_arguments, negate, wait_timeout)
+        except TaskTimeoutException as e:
+            # task timed out without getting an OK result, move on
+            results[segment_index] = False
+            l.info("Timeout reached while waiting for '%s': '%s %s', moving on with next check" % (cmd_name, check_name, check_arguments), host, cluster)
+        except TaskRunException:
+            # task run has failed
+            raise
+        except Exception as e:
+            # some other exception
+            raise
+
+        else:
+            # no timeout has been reached, result must be true
+            if multiple:
+                # true result, but we need all the checks to be true, so we store the result and move on
+                results[segment_index] = True
+            else:
+                # true result, and we only need one true result, return with true
+                return True
+
+        # check if we are at the end of the results list, if yes, evaluate it's contents
+        if segment_index == len(cmd_segments) - 1:
+            if multiple:
+                # evaluate the contents of results
+                if all(res == True for res in results.values()):
+                    return True
+            else:
+                # we shouldn't be here ever
+                pass
+        
+        # move on to next element
+        # treat the results list as a ring buffer by manipulating the index we use to reference values within the list
+        segment_index = counter % len(cmd_segments)
+        counter += 1
+
+
+def run_wait_task_helper (host, cluster, check_name, check_arguments, negate, wait_timeout=60):
+    """ 
+    Helper for run_wait_task(), will run one wait check until timeout is reached
+    Needed to be able to easily get out of two 'while True' loops
+    """
+    # get the start time, will be used to measure if 'wait_timeout' has been reached
+    start_time = int(time.time())
+    while True:
+
+        # this loop is needed to ensure we wait until the check is finally ok, or wait_timeout is reached
+        try:
+            l.info("Executing wait '%s %s'" % (check_name, check_arguments), host, cluster)
+            with quiet():             
+                result = execute(check_name, check_arguments, cluster, hosts=[host])
+                if negate:
+                    result[host] = not result[host]
+        except Exception as e:
+            raise TaskRunException("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
+        if result[host] == True:
+            # break out of while True
             break
-    # if we are here:
-    #   * multiple is true
-    #   * all waits have finished with success, no need to evaluate results
-    return True
+        else:
+            # failed, have to wait longer
+            l.debug("Waiting before retrying", host, cluster)
+            time.sleep(10)
+
+        # check if timeout has been reached
+        if not wait_timeout is None:
+            if int(time.time()) > start_time + wait_timeout:
+                raise TaskTimeoutException("Wait check '%s' didn't return with OK state before wait_timeout has been reached." % (check_name))
+
+    l.debug("Got response, moving on", host, cluster)
+    return True      
 
 def run_execute_tasks(host, cluster, cmd_name, cmd_segments, multiple):
     """ 
