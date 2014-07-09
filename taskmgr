@@ -284,7 +284,7 @@ def print_statistics():
             for host in skipped_list:
                 l.info(host)
 
-    return (results_flat, results_ok, results_failed)
+    return (results_flat, results_ok, results_failed, skipped_list)
 
 def worker(host, cluster, config, args):
     """ The worker function. This is the code that gets executed for each cluster/node combination.
@@ -973,11 +973,17 @@ if __name__ == '__main__':
     # close fabric ssh connections
     fabricnetwork.disconnect_all()
 
-    results_flat, results_ok, results_failed = print_statistics()
+    results_flat, results_ok, results_failed, skipped_list = print_statistics()
     if len(results_flat) and not len(results_failed):
-        exit_code = 0
-        l.info("")
-        l.important("All was OK!")
+        if len(skipped_list):
+            exit_code = 0
+            l.info("")
+            l.important("All was OK!")
+        else:
+            # there were skipped hosts
+            exit_code = 2
+            l.info("")
+            l.important("All was OK!")            
     else:
         exit_code = 1
     sys.exit(exit_code)

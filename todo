@@ -3,7 +3,9 @@ fix logging with multiprocessing -> allegedly needs locking
 make wait time a parameter
 check process running
 check memcached via port
-if skipped host, don't say all was fine
+print progress, enable with switch
+--nocolor?
+--trace?
 
 done:
 check_sessions = always_true for session-less services)
@@ -12,3 +14,4 @@ add empty check that will return always with true (and again for fals for testin
 when waiting, use a timeout, and on reaching the timeout (or failed check result) iterate between the checks, to give a chance to all of them to return a true value
 implement switch for running on all clusters
 missing checks should be always OK (or error, configurable)
+if skipped host, don't say all was fine
