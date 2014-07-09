@@ -53,6 +53,7 @@ class TaskMgr(object):
         self.config = dict()
         self.worker_pools = list()
         self.ssh_config = None
+        self.clusters = None
 
     def get_arguments(self):
         return self.args
@@ -147,15 +148,16 @@ class TaskMgr(object):
                 for host in f.readlines():
                     if re.search("(^\s*$|^#)", host):
                         continue
-                    if re.search(self.config["cluster"][cluster]["pattern"], host, flags=re.IGNORECASE):
-                        hosts.append(host.rstrip())
+                    for pattern in self.config["cluster"][cluster]["pattern"].split(" "):
+                        if re.search(pattern, host, flags=re.IGNORECASE):
+                            hosts.append(host.rstrip())
             except Exception as e: 
                 handle_exception("Problem while reading host file '%s': %s" % (self.args.hosts_file, str(e)))
         return hosts
 
     def get_full_node_list(self):
         hosts = list()
-        for cluster in sorted(self.args.cluster_name):
+        for cluster in sorted(self.clusters):
             hosts.append(self.get_node_list_for_cluster(cluster))
         # return a flattened list (instead of lists of lists)
         return sorted([item for sublist in hosts for item in sublist])
@@ -185,6 +187,9 @@ class TaskMgr(object):
                     usernames.append(m.group(1).rstrip())
         # while returning get rid of duplicates
         return sorted(set(usernames))
+
+    def set_clusters(self, clusters):
+        self.clusters = clusters
 
 def handle_exception(exception, *args, **kwargs):
     global pid
@@ -879,9 +884,6 @@ if __name__ == '__main__':
     if not os.path.exists(args.ssh_config):
         handle_exception("Provided ssh config file '%s' doesn't exist!" % args.ssh_config)
 
-    # count how many machines will be processed - for statistics later on
-    nodelist = taskmgr.get_full_node_list()
-
     # read the passwords for all users defined in ssh_config
     # fabric would do this, but because of parallel execution it doesn't always work
     users = taskmgr.get_ssh_users()
@@ -893,8 +895,21 @@ if __name__ == '__main__':
        for user in users:
             passwords[user] = getpass.getpass("Please provide password for user '%s': " % user)
 
+    # if cluster name is 'all', then get all clusters from the cluster configuration sections and put it into args.cluster_name
+    clusters = list()
+    if len(args.cluster_name) == 1 and args.cluster_name[0] == "all":
+        clusters = sorted(config["cluster"].keys())
+    else:
+        clusters = args.cluster_name
+
+    # store the clusters in taskmgr
+    taskmgr.set_clusters(clusters)
+
+    # count how many machines will be processed - for statistics later on
+    nodelist = taskmgr.get_full_node_list()
+
     # iterate on the provided cluster names
-    for cluster in args.cluster_name:
+    for cluster in clusters:
 
         hosts = taskmgr.get_node_list_for_cluster(cluster)
         ## check if the cluster definition exists
