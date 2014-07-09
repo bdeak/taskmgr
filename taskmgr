@@ -25,7 +25,7 @@ import multiprocessing
 import Queue
 
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 class OperationException(Exception):
     pass
@@ -397,7 +397,6 @@ def worker(host, cluster, config, args):
         
             # check if a counterpart in cluster.ini exists
             # pair the check name with the one that is defined in the cluster configuration
-
             if not cmd_name in config['cluster'][cluster]:
                 if config["taskmgr"]["general"]["unknown_command_behavior"] == "fail":
                     handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, cluster), host, cluster)
