@@ -6,6 +6,7 @@ check memcached via port
 print progress, enable with switch
 --nocolor?
 --trace?
+fix information display, on fail show arguments, etc
 
 done:
 check_sessions = always_true for session-less services)

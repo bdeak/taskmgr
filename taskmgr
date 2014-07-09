@@ -975,7 +975,7 @@ if __name__ == '__main__':
 
     results_flat, results_ok, results_failed, skipped_list = print_statistics()
     if len(results_flat) and not len(results_failed):
-        if len(skipped_list):
+        if not len(skipped_list):
             exit_code = 0
             l.info("")
             l.important("All was OK!")
@@ -983,7 +983,7 @@ if __name__ == '__main__':
             # there were skipped hosts
             exit_code = 2
             l.info("")
-            l.important("All was OK!")            
+            l.info("There were no errors, but there were some skipped hosts!") 
     else:
         exit_code = 1
     sys.exit(exit_code)
