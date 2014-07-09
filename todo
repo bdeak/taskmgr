@@ -4,6 +4,7 @@ make wait time a parameter
 missing checks should be always OK (or error, configurable)
 check process running
 check memcached via port
+if skipped host, don't say all was fine
 
 done:
 check_sessions = always_true for session-less services)

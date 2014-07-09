@@ -111,6 +111,7 @@ class TaskMgr(object):
         optional = parser.add_argument_group(title='Optional arguments')
         optional.add_argument("--cluster-config", help="The location of the cluster configuration file", default="cluster.ini")
         optional.add_argument("--command-config", help="The location of the command configuration file", default="commands.ini")
+        optional.add_argument("--config", help="The location of the taskmgr configuration file", default="config.ini")      
         optional.add_argument("-H", "--hosts-file", help="File storing the hosts to work on, one by line. If not used, the hostnames from cluster.ini are used.") # fixme
         optional.add_argument("-d", "--debug", help="Show debug information", action="store_true", default=False)
         optional.add_argument("-x", "--unsafe", help="Enable unsafe operation. (disable host key checking, etc)", action='store_true', default=False)
@@ -396,15 +397,21 @@ def worker(host, cluster, config, args):
         
             # check if a counterpart in cluster.ini exists
             # pair the check name with the one that is defined in the cluster configuration
+
             if not cmd_name in config['cluster'][cluster]:
-                handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, cluster), host, cluster)
+                if config["taskmgr"]["general"]["unknown_command_behavior"] == "fail":
+                    handle_exception("Referenced command '%s' is not defined in in '%s' for cluster '%s'!" % (cmd_name, args.cluster_config, cluster), host, cluster)
+                elif config["taskmgr"]["general"]["unknown_command_behavior"] == "ok":
+                    tmp_command = "cmd:checks.dummy:ok"
+                else:
+                    handle_exception("Provided value '%s' for 'unknown_command_behavior' is unknown in taskmgr configuration '%s'" % (config["taskmgr"]["general"]["unknown_command_behavior"], args.config), host, cluster)
+            else:
+                # run the check, fail if result is false
+                # remove all|any form the end
         
-            # run the check, fail if result is false
-            # remove all|any form the end
-    
-            # split the command on 'cmd:'
-            # check if ' (all|any)$' matches the command
-            tmp_command = config["cluster"][cluster][cmd_name].replace("%HOST%", host)
+                # split the command on 'cmd:'
+                # check if ' (all|any)$' matches the command
+                tmp_command = config["cluster"][cluster][cmd_name].replace("%HOST%", host)
 
             # if arguments are passed from commands.ini, add them to tmp_command 
             if not cmd_arguments is None:
@@ -854,6 +861,14 @@ if __name__ == '__main__':
         handle_exception(e)
     # get the parsed configuration in the form of a dict
     config["command"] = taskmgr.get_configuration("command")
+
+    # parse the default configuration
+    try:
+        taskmgr.read_configuration(args.config, ctype="taskmgr")
+    except OperationException as e:
+        handle_exception(e)
+    # get the parsed configuration in the form of a dict
+    config["taskmgr"] = taskmgr.get_configuration("taskmgr")    
 
     if not args.command in config["command"].keys():
         handle_exception("Configuration in '%s' for command '%s' doesn't exist!" % (args.command_config, args.command))
