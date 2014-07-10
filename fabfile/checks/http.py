@@ -73,7 +73,12 @@ def check_http(url, method, required_result, post_data):
     req = urllib2.Request(url, data)
     try:
         response = urllib2.urlopen(req)
-    except (urllib2.URLError, urllib2.HTTPError) as e:
+    except urllib2.URLError as e:
+        if required_result_numeric and required_result == 401 and e.reason == "Unauthorized":
+            return True
+        else:
+            return False
+    except urllib2.HTTPError as e:
         # the request failed, unless response is numeric, and is matched, return false
         if required_result_numeric:
             if e.code == required_result:
