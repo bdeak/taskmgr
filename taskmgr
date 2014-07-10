@@ -377,12 +377,12 @@ def worker(host, cluster, config, args):
 
         else:
             # type 1)            
-            m = re.search("^(check|wait|execute)(?: (not))? ([^ :]+)(?::(.+))?(?: \[(skip|stop)\])?$", command)
+            m = re.search("^(check|wait|execute)(?: (not))? ([^ :]+)(?::(.+?))?(?: \[(skip|stop)\])?$", command)
             if m:
                 action, negate, cmd_name, cmd_arguments, erroraction = m.groups()
             else:
                 raise AttributeError("Can't parse the command definition for command '%s' in '%s'" % (command, args.command_config))
-    
+
             if erroraction is None:
                 erroraction = "stop"
             
