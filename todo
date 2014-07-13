@@ -8,6 +8,8 @@ print progress, enable with switch
 --trace?
 fix information display, on fail show arguments, etc
 fix if no host file and no pattern is given
+implement if clause
+implement while clause?
 
 done:
 check_sessions = always_true for session-less services)
