@@ -118,6 +118,7 @@ class TaskMgr(object):
         optional.add_argument("--show-exception", help="Show exception when tasks fail", action='store_true', default=False)
         optional.add_argument("--ssh-config", help="The ssh configuration file to use.", default="%s/.ssh/config" % os.environ["HOME"])
         optional.add_argument("-f", "--force", help="Use force, like not asking confirmation for custom commands", action="store_true", default=False)
+        optional.add_argument("--print-unprocessed", help="When using hostlist, print which hosts would not be processed due to lack of matching pattern", action="store_true", default=False)
         optional.add_argument("-v", "--version", action="version", version=__version__)
         optional.add_argument("-h", "--help", help="Show this help", action="help")
 
@@ -155,6 +156,31 @@ class TaskMgr(object):
             except Exception as e: 
                 handle_exception("Problem while reading host file '%s': %s" % (self.args.hosts_file, str(e)))
         return hosts
+
+    def get_unmatched_hosts(self):
+        """ return all the nodes from hosts-file which doesn't match any patterns """
+
+        # get the hosts from the host file which are matching the pattern given for the current cluster in cluster.ini
+        # expand the expression found in cluster.ini using bash - might need to rewrite this in pure python?
+        hosts = list()
+        found = dict()
+        try:
+            f = open(self.args.hosts_file)
+            for host in f.readlines():
+                host = host.rstrip()
+                if re.search("(^\s*$|^#)", host):
+                    continue
+                for cluster in self.config["cluster"].keys():
+                    for pattern in self.config["cluster"][cluster]["pattern"].split(" "):
+                        if re.search(pattern, host, flags=re.IGNORECASE):
+                            found[host] = True
+                
+                if not host in found.keys():
+                    hosts.append(host.rstrip())                            
+
+        except Exception as e: 
+            handle_exception("Problem while reading host file '%s': %s" % (self.args.hosts_file, str(e)))
+        return sorted(set(hosts))
 
     def get_full_node_list(self):
         hosts = list()
@@ -579,7 +605,7 @@ def worker(host, cluster, config, args):
                             raise StopException("Requested action for %s %s on %s/%s is '%s'" %(action, cmd_name, cluster, host, flags))
                     else:
                         # retry
-                        l.error("%s '%s' failed, but retrying %d more time(s) after %d seconds of delay" % (action, cmd_name, int(flags["tries"])-1-counter, int(flags["delay"])), host, cluster)
+                        l.warning("%s '%s' failed, but retrying %d more time(s) after %d seconds of delay" % (action, cmd_name, int(flags["tries"])-1-counter, int(flags["delay"])), host, cluster)
                         time.sleep(int(flags["delay"]))
                         continue
                 else:
@@ -1011,6 +1037,15 @@ if __name__ == '__main__':
                     l.info("User answered yes, going on")
                     print ""
                     break
+
+    if args.print_unprocessed:
+        if not args.hosts_file:
+            handle_exception("--print-unprocessed can only be used if --hosts_file is also used.")
+        unprocessed_hosts = taskmgr.get_unmatched_hosts()
+        print "Hosts that are in '%s' but due to no matching pattern will not be processed: " % args.hosts_file
+        for host in unprocessed_hosts:
+            print host
+        sys.exit(0)
 
     if not os.path.exists(args.ssh_config):
         handle_exception("Provided ssh config file '%s' doesn't exist!" % args.ssh_config)
