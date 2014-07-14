@@ -51,6 +51,28 @@ def check_node_active():
         except Exception as e:
             raise RuntimeError("Failed to parse xml output from crm_mon: %s" % str(e))
 
-        for e in root.findall('./crm_mon/resources/group/*/node/@name'):
-            print e
-        return False
+        nodes = list()
+        
+        # get the number of resources
+        try:
+            number_resources = int(root.find('.//resources/group').attrib['number_resources'])
+        except Exception as e:
+            raise RuntimeError("Failed to get the number of resources from the xml output of crm_mon: %s" % str(e))
+
+        for e in root.findall('.//resources/group/*/node'):
+            nodes.append(e.attrib["name"])
+
+        # get rid of duplicates
+        nodes_unique = set(nodes)
+
+        # check if the current node is in nodes
+        if env.host_string in nodes_unique:
+            # yes, it's an active node
+            # there should be 'number_resources' many entries in 'nodes' of our hostname
+            if sum(x == env.host_string for x in nodes) == number_resources:
+                return True
+            else:
+                l.warning("Some resources are not active on this node, that should be. %d vs %d" % (sum(x == env.host_string for x in nodes), number_resources))
+                return False
+        else:
+            return False

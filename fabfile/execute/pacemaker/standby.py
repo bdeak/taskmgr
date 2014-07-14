@@ -14,15 +14,15 @@ def node(input_params, cluster):
     """ Execute 'crm node standby' or 'crm node online'
 
         input_params is a string:
-        enable|disable
+        standby|online
 
     """
     # split up the input_params, and make sense of it
-    m = re.search("^(enable|disable)$", input_params)
+    m = re.search("^(standby|online)$", input_params)
     if not m:
         raise AttributeError("The given input_params '%s' doesn't match the requirements!" % input_params)
 
-    action = m.groups(1)
+    action = m.group(1)
 
     try:
         result = sudo("test -e /usr/sbin/crm")
@@ -37,11 +37,11 @@ def node(input_params, cluster):
 def standby_node(action):
     """ Standby or make a node online using crm """
 
-    if action == "enable":
-        command = "crm node online"
+    if action == "standby":
+        command = "crm node standby"
     else:
-        action = "crm node standby"
-
+        command = "crm node online"
+        
     try:
         result = sudo(command)
     except:
