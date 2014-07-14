@@ -1110,11 +1110,6 @@ if __name__ == '__main__':
         print "Received Ctrl + C, exiting..."
         # don't wait, just close queues
         exit_handler(1)
-        #for async_worker in taskmgr.get_worker_pools():
-        #    # finish processing jobs, close queues
-        #    async_worker.finish()
-        #    async_worker.close_queues()
-        #sys.exit(1)
 
     # close fabric ssh connections
     fabricnetwork.disconnect_all()
