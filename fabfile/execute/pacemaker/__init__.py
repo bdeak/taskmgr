@@ -1,4 +1,4 @@
-__all__ = ['icli']
+__all__ = ['standby']
 # Don't modify the line above, or this line!
 import automodinit
 automodinit.automodinit(__name__, __file__, globals())

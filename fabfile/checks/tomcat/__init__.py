@@ -1,8 +1,6 @@
-import pkgutil
-
-# autoimport all submodules
-__all__ = []
-for loader, module_name, is_pkg in  pkgutil.walk_packages(__path__):
-    __all__.append(module_name)
-    module = loader.find_module(module_name).load_module(module_name)
-    exec('%s = module' % module_name)
+__all__ = ['sessions']
+# Don't modify the line above, or this line!
+import automodinit
+automodinit.automodinit(__name__, __file__, globals())
+del automodinit
+# Anything else you want can go after here, it won't get modified.
