@@ -1,4 +1,4 @@
-__all__ = ['access', 'dummy', 'galera', 'http', 'icmp', 'kernel', 'pacemaker', 'package', 'port', 'release', 'tomcat']
+__all__ = ['cluster']
 # Don't modify the line above, or this line!
 import automodinit
 automodinit.automodinit(__name__, __file__, globals())
