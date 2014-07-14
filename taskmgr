@@ -345,14 +345,15 @@ def worker(host, cluster, config, args):
             if m:
                 action, negate, tmp_command, tmp_flags = m.groups()
                 flags = dict()
-                for flag in tmp_flags.split(","):
-                    if len(flag.split("=")) > 1:
-                        # key-value pair
-                        key, value = flags.split("=")
-                        flags[key] = value
-                    else:
-                        # booleans
-                        flags[flag] = True
+                if not tmp_flags is None:
+                    for flag in tmp_flags.split(","):
+                        if len(flag.split("=")) > 1:
+                            # key-value pair
+                            key, value = flag.split("=")
+                            flags[key] = value
+                        else:
+                            # booleans
+                            flags[flag] = True
 
                 # sanity checking, set defaults
                 if not "skip" in flags.keys() and not "stop" in flags.keys():
@@ -360,11 +361,17 @@ def worker(host, cluster, config, args):
                 if "skip" in flags.keys() and "stop" in flags.keys():
                     handle_exception("Providing both 'skip' and 'stop' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
 
+                # sanity checking, set defaults
                 if not "all" in flags.keys() and not "any" in flags.keys():
-                    flags["all"] = True
+                    flags["multiple"] = True
+                elif "any" in flags.keys():
+                    flags["multiple"] = False
+                else:
+                    flags["multiple"] = True
+
                 if "all" in flags.keys() and "any" in flags.keys():
                     handle_exception("Providing both 'all' and 'any' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
-                
+
                 if not "tries" in flags.keys():
                     flags["tries"] = 1
 
@@ -411,14 +418,15 @@ def worker(host, cluster, config, args):
                 raise AttributeError("Can't parse the command definition for command '%s' in '%s'" % (command, args.command_config))
 
             flags = dict()
-            for flag in tmp_flags.split(","):
-                if len(flag.split("=")) > 1:
-                    # key-value pair
-                    key, value = flags.split("=")
-                    flags[key] = value
-                else:
-                    # booleans
-                    flags[flag] = True
+            if not tmp_flags is None:
+                for flag in tmp_flags.split(","):
+                    if len(flag.split("=")) > 1:
+                        # key-value pair
+                        key, value = flag.split("=")
+                        flags[key] = value
+                    else:
+                        # booleans
+                        flags[flag] = True
 
             # sanity checking, set defaults
             if not "skip" in flags.keys() and not "stop" in flags.keys():
@@ -481,16 +489,37 @@ def worker(host, cluster, config, args):
             m = re.search("^(.*) \[(.*)\]$", tmp_command, flags=re.IGNORECASE)
             if m:
                 # found, set multiple, and remove it from the end of the string
-                tmp_command = m.group(1)
-                if m.group(2) == "all":
-                    multiple = True
-                elif m.group(2) == "any":
-                    multiple = False
+                tmp_command, tmp_flags = m.groups()
+                if not tmp_flags is None:
+                    for flag in tmp_flags.split(","):
+                        if len(flag.split("=")) > 1:
+                            # key-value pair
+                            key, value = flag.split("=")
+                            flags[key] = value
+                        else:
+                            # booleans
+                            flags[flag] = True
+
+                # sanity checking, set defaults
+                if not "all" in flags.keys() and not "any" in flags.keys():
+                    flags["multiple"] = True
+                elif "any" in flags.keys():
+                    flags["multiple"] = False
                 else:
-                    handle_exception("Syntax error for command '%s' in '%s' for cluster '%s': multiple must be either 'all' or 'any'" % (cmd_name, args.cluster_config, cluster), host, cluster)
+                    flags["multiple"] = True
+
+                if "all" in flags.keys() and "any" in flags.keys():
+                    handle_exception("Providing both 'all' and 'any' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
+
+                if not "tries" in flags.keys():
+                    flags["tries"] = 1
+
+                if "tries" in flags.keys() and not "delay" in flags.keys():
+                    flags["delay"] = 120
+
             else:
                 # default is 'all'
-                multiple = True
+                flags["multiple"] = True
     
             # split commands on 'cmd:', and filter out any empty elements
             cmd_segments = filter(bool, re.split(" ?cmd:", tmp_command, flags=re.IGNORECASE))
@@ -507,10 +536,10 @@ def worker(host, cluster, config, args):
                 raise
             if not result:
                 l.error("%s '%s' failed" % (action, cmd_name), host, cluster)
-                if flags["skip"]
+                if flags["skip"]:
                     l.warning("Error action for %s '%s' is 'skip', moving on with next host" % (action, cmd_name), host, cluster)
                     return (host, cluster, False)
-                elif flags["stop"]
+                elif flags["stop"]:
                     raise StopException("Requested action for %s %s on %s/%s is '%s'" %(action, cmd_name, cluster, host, flags))
             else:
                 l.info("%s '%s' OK" % (action, cmd_name), host, cluster)
@@ -531,7 +560,7 @@ def worker(host, cluster, config, args):
         
         elif action == "execute":
             # do multiple iterations if needed - sometimes execute calls may fail, like dpkg is locked, etc
-            for counter in range(tries):
+            for counter in range(int(flags["tries"])):
                 try:
                     result = run_execute_tasks(host, cluster, cmd_name, cmd_segments, flags)
                     if flags["negate"]:
@@ -540,7 +569,7 @@ def worker(host, cluster, config, args):
                     # don't try again on an exception - might need to reconsider later
                     raise
                 if not result:
-                    if counter = tries - 1:
+                    if counter == int(flags["tries"]) - 1:
                         # last try
                         l.error("%s '%s' failed" % (action, cmd_name), host, cluster)
                         if flags["skip"]:
@@ -550,7 +579,8 @@ def worker(host, cluster, config, args):
                             raise StopException("Requested action for %s %s on %s/%s is '%s'" %(action, cmd_name, cluster, host, flags))
                     else:
                         # retry
-                        l.error("%s '%s' failed, but retrying %d more times after %d seconds of delay" % (action, cmd_name, tries-counter, delay), host, cluster)
+                        l.error("%s '%s' failed, but retrying %d more time(s) after %d seconds of delay" % (action, cmd_name, int(flags["tries"])-1-counter, int(flags["delay"])), host, cluster)
+                        time.sleep(int(flags["delay"]))
                         continue
                 else:
                     l.info("%s '%s' OK" % (action, cmd_name), host, cluster)
@@ -561,7 +591,7 @@ def worker(host, cluster, config, args):
     l.important("All commands for %s/%s have been successfully run" % (cluster, host), host, cluster)
     return (host, cluster, True)
 
-def run_check_tasks(host, cluster, cmd_name, cmd_segments, multiple):
+def run_check_tasks(host, cluster, cmd_name, cmd_segments, flags):
     """ 
         A helper task called from worker() to execute a check task
 
@@ -569,49 +599,49 @@ def run_check_tasks(host, cluster, cmd_name, cmd_segments, multiple):
         cluster: cluster of which the given host is part of
         cmd_name: name of the given command that is running (host_alive, etc)
         cmd_segments: list containing the command segments that will be run
-        multiple: true/false, showing how many of the cmd_segments need to return success in order to consider the
+        flags: Dictionary holding the flags that modify the behavior of task runs
+            flags["multiple"] = true/false, showing how many of the cmd_segments need to return success in order to consider the
                   result to be success. True: all of them, False, at least one.
     """
     global timeout
     global command_timeout
     global callables
     results = list()
-    for i in range(times):
-        for cmd in cmd_segments:
-            check_name = cmd.split(":")[0].rstrip()
-            check_arguments = ":".join(cmd.split(":")[1:]).rstrip()
-            if not check_name in fabricmain._task_names(callables):
-                raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % check_name)
+    for cmd in cmd_segments:
+        check_name = cmd.split(":")[0].rstrip()
+        check_arguments = ":".join(cmd.split(":")[1:]).rstrip()
+        if not check_name in fabricmain._task_names(callables):
+            raise NoSuchTaskException("Fabric task '%s' doesn't exist!" % check_name)
 
-            try: 
-                l.info("Executing check %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
-                with quiet():
-                    result = execute(check_name, check_arguments, cluster, hosts=[host])
-            except Exception as e:
-                raise TaskRunException("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
+        try: 
+            l.info("Executing check %s: '%s %s'" % (cmd_name, check_name, check_arguments), host, cluster)
+            with quiet():
+                result = execute(check_name, check_arguments, cluster, hosts=[host])
+        except Exception as e:
+            raise TaskRunException("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
 
-            # got the result, good
-            if multiple:
-                if result[host]:
-                    results.append(result[host])
-                    continue
-                else:
-                    return False
+        # got the result, good
+        if flags["multiple"]:
+            if result[host]:
+                results.append(result[host])
+                continue
             else:
-                if result[host]:
-                    return True
-                else:
-                    continue
-                    results.append(result[host])
-        # if we are here all of the checks have been run
-        # either because multiple is True, or because multiple is False, but
-        # the first checks failed
-        if multiple:
-            return all(res == True for res in results)
+                return False
         else:
-            return any(res == True for res in results)
+            if result[host]:
+                return True
+            else:
+                continue
+                results.append(result[host])
+    # if we are here all of the checks have been run
+    # either because multiple is True, or because multiple is False, but
+    # the first checks failed
+    if flags["multiple"]:
+        return all(res == True for res in results)
+    else:
+        return any(res == True for res in results)
 
-def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple, negate):
+def run_wait_tasks(host, cluster, cmd_name, cmd_segments, flags):
     """ 
     A helper task called from worker() to execute a wait task
     """
@@ -640,7 +670,7 @@ def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple, negate):
             wait_timeout = None
 
         try:
-            result = run_wait_task_helper(host, cluster, check_name, check_arguments, negate, wait_timeout)
+            result = run_wait_task_helper(host, cluster, check_name, check_arguments, flags, wait_timeout)
         except TaskTimeoutException as e:
             # task timed out without getting an OK result, move on
             results[segment_index] = False
@@ -654,7 +684,7 @@ def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple, negate):
 
         else:
             # no timeout has been reached, result must be true
-            if multiple:
+            if flags["multiple"]:
                 # true result, but we need all the checks to be true, so we store the result and move on
                 results[segment_index] = True
             else:
@@ -663,7 +693,7 @@ def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple, negate):
 
         # check if we are at the end of the results list, if yes, evaluate it's contents
         if segment_index == len(cmd_segments) - 1:
-            if multiple:
+            if flags["multiple"]:
                 # evaluate the contents of results
                 if all(res == True for res in results.values()):
                     return True
@@ -677,7 +707,7 @@ def run_wait_tasks(host, cluster, cmd_name, cmd_segments, multiple, negate):
         counter += 1
 
 
-def run_wait_task_helper (host, cluster, check_name, check_arguments, negate, wait_timeout=60):
+def run_wait_task_helper (host, cluster, check_name, check_arguments, flags, wait_timeout=60):
     """ 
     Helper for run_wait_task(), will run one wait check until timeout is reached
     Needed to be able to easily get out of two 'while True' loops
@@ -691,7 +721,7 @@ def run_wait_task_helper (host, cluster, check_name, check_arguments, negate, wa
             l.info("Executing wait '%s %s'" % (check_name, check_arguments), host, cluster)
             with quiet():             
                 result = execute(check_name, check_arguments, cluster, hosts=[host])
-                if negate:
+                if flags["negate"]:
                     result[host] = not result[host]
         except Exception as e:
             raise TaskRunException("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
@@ -711,7 +741,7 @@ def run_wait_task_helper (host, cluster, check_name, check_arguments, negate, wa
     l.debug("Got response, moving on", host, cluster)
     return True      
 
-def run_execute_tasks(host, cluster, cmd_name, cmd_segments, multiple):
+def run_execute_tasks(host, cluster, cmd_name, cmd_segments, flags):
     """ 
         A helper task called from worker() to execute an 'execute' task
     """
@@ -733,7 +763,7 @@ def run_execute_tasks(host, cluster, cmd_name, cmd_segments, multiple):
             raise TaskRunException("Failed to run fabric task '%s' on host '%s' (cluster '%s'): %s" % (check_name, host, cluster, str(e)))
 
         # got the result, good
-        if multiple:
+        if flags["multiple"]:
             if result[host]:
                 results.append(result[host])
                 continue
@@ -748,7 +778,7 @@ def run_execute_tasks(host, cluster, cmd_name, cmd_segments, multiple):
     # if we are here all of the checks have been run
     # either because multiple is True, or because multiple is False, but
     # the first checks failed
-    if multiple:
+    if flags["multiple"]:
         return all(res == True for res in results)
     else:
         return any(res == True for res in results)
@@ -1010,8 +1040,17 @@ if __name__ == '__main__':
     nodelist = taskmgr.get_full_node_list()
 
     # iterate on the provided cluster names
+    nodelist = dict()
     for cluster in clusters:
+        # sanity check - make sure one machine is only part of one cluster
+        hosts = taskmgr.get_node_list_for_cluster(cluster)
+        for host in hosts:
+            if host not in nodelist.keys():
+                nodelist[host] = cluster
+            else:
+                handle_exception("Host '%s' is member of multiple clusters: '%s' <-> '%s', exiting!" % (host, nodelist[host], cluster))
 
+    for cluster in clusters:
         hosts = taskmgr.get_node_list_for_cluster(cluster)
 
         async_worker = AsyncWorker(cluster, args.show_exception)
