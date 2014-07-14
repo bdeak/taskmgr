@@ -19,3 +19,5 @@ when waiting, use a timeout, and on reaching the timeout (or failed check result
 implement switch for running on all clusters
 missing checks should be always OK (or error, configurable)
 if skipped host, don't say all was fine
+add pacemaker checks and commands
+add galera checks
