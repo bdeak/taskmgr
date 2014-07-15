@@ -357,7 +357,7 @@ def worker(host, cluster, config, args):
         # set defaults for all flags
         flags = dict()
         flags["skip"] = False
-        flags["stop"] = False
+        flags["stop"] = True
         flags["negate"] = False
         flags["multiple"] = True
         flags["tries"] = 1
