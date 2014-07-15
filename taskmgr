@@ -354,6 +354,15 @@ def worker(host, cluster, config, args):
     # command2: segment1 segment2 segment3
     for command in config["command"][args.command]:
 
+        # set defaults for all flags
+        flags = dict()
+        flags["skip"] = False
+        flags["stop"] = False
+        flags["negate"] = False
+        flags["multiple"] = True
+        flags["tries"] = 1
+        flags["delay"] = 120
+
         # there are two types of input in commands.ini:
         # 1) check|wait|execute [not] command[:arguments] [skip|stop|tries=1|delay=120] (default: stop)
         # 2) check|wait|execute [not] cmd:task.name:arguments [cmd:task.name2:arguments] [skip|stop|all|any|tries=1|delay=120]
@@ -370,7 +379,6 @@ def worker(host, cluster, config, args):
             m = re.search("^([^ ]+)(?: (not))?( cmd:[^\]]+)(?: \[([^\]]+)])?\s*$", command)
             if m:
                 action, negate, tmp_command, tmp_flags = m.groups()
-                flags = dict()
                 if not tmp_flags is None:
                     for flag in tmp_flags.split(","):
                         if len(flag.split("=")) > 1:
@@ -382,56 +390,27 @@ def worker(host, cluster, config, args):
                             flags[flag] = True
 
                 # sanity checking, set defaults
-                if not "skip" in flags.keys() and not "stop" in flags.keys():
-                    flags["stop"] = True
-                if "skip" in flags.keys() and "stop" in flags.keys():
-                    handle_exception("Providing both 'skip' and 'stop' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
+                try:
+                    if flags["skip"] and flags["stop"]:
+                        handle_exception("Providing both 'skip' and 'stop' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
+                except KeyError:
+                    pass
 
                 # sanity checking, set defaults
-                if not "all" in flags.keys() and not "any" in flags.keys():
-                    flags["multiple"] = True
-                elif "any" in flags.keys():
+                if "any" in flags.keys():
                     flags["multiple"] = False
-                else:
-                    flags["multiple"] = True
 
-                if "all" in flags.keys() and "any" in flags.keys():
-                    handle_exception("Providing both 'all' and 'any' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
-
-                if not "tries" in flags.keys():
-                    flags["tries"] = 1
-
-                if "tries" in flags.keys() and not "delay" in flags.keys():
-                    flags["delay"] = 120
+                try:
+                    if flags["all"] and flags["any"]:
+                        handle_exception("Providing both 'all' and 'any' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
+                except KeyError:
+                    pass
 
                 if negate:
                     flags["negate"] = True
-                else:
-                    flags["negate"] = False
-
-                #flags = m.group(4)
-                #if not flags is None:
-                #    flags = flags.split(",")
-                #    if "skip" in flags:
-                #        erroraction = "skip"
-                #    if "stop" in flags:
-                #        erroraction = "stop"
-                #    if "skip" in flags and "stop" in flags:
-                #        handle_exception("Providing both 'skip' and 'stop' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
-                #    if "all" in flags:
-                #        multiple = True
-                #    if "any" in flags:
-                #        multiple = False
-                #    if "any" in flags and "all" in flags:
-                #        handle_exception("Providing both 'any' and 'all' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
 
             else:
                 handle_exception("Can't parse command '%s/%s'" % (args.command, command), host, cluster)
-
-            #if negate is None:
-            #    negate = False
-            #elif negate == "not":
-            #    negate = True
 
             cmd_segments = filter(bool, re.split(" ?cmd:", tmp_command, flags=re.IGNORECASE))
 
@@ -443,7 +422,6 @@ def worker(host, cluster, config, args):
             else:
                 raise AttributeError("Can't parse the command definition for command '%s' in '%s'" % (command, args.command_config))
 
-            flags = dict()
             if not tmp_flags is None:
                 for flag in tmp_flags.split(","):
                     if len(flag.split("=")) > 1:
@@ -455,35 +433,15 @@ def worker(host, cluster, config, args):
                         flags[flag] = True
 
             # sanity checking, set defaults
-            if not "skip" in flags.keys() and not "stop" in flags.keys():
-                flags["stop"] = True
-            if "skip" in flags.keys() and "stop" in flags.keys():
-                handle_exception("Providing both 'skip' and 'stop' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
-
-            if not "tries" in flags.keys():
-                flags["tries"] = 1
-
-            if "tries" in flags.keys() and not "delay" in flags.keys():
-                flags["delay"] = 120
+            try:
+                if flags["skip"] and flags["stop"]:
+                    handle_exception("Providing both 'skip' and 'stop' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
+            except KeyError:
+                pass
 
             if negate:
                 flags["negate"] = True
-            else:
-                flags["negate"] = False
-
-#            if erroraction is None:
-#                erroraction = "stop"
-#            
-
-#            if negate is None:
-#                negate = False
-#            elif negate == "not":
-#                negate = True
-    
-#            erroractions_available = ["stop", "skip"]
-#            if not erroraction in erroractions_available:
-#                handle_exception("Error action '%s' for command '%s/%s %s' is unknown. Please use either of: %s" % (erroraction, args.command, action, cmd_name, ",".join(erroractions_available)))
-        
+       
             # check if a counterpart in cluster.ini exists
             # pair the check name with the one that is defined in the cluster configuration
             if not cmd_name in config['cluster'][cluster]:
@@ -527,25 +485,18 @@ def worker(host, cluster, config, args):
                             flags[flag] = True
 
                 # sanity checking, set defaults
-                if not "all" in flags.keys() and not "any" in flags.keys():
-                    flags["multiple"] = True
-                elif "any" in flags.keys():
+                if "any" in flags.keys():
                     flags["multiple"] = False
-                else:
-                    flags["multiple"] = True
 
-                if "all" in flags.keys() and "any" in flags.keys():
-                    handle_exception("Providing both 'all' and 'any' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
-
-                if not "tries" in flags.keys():
-                    flags["tries"] = 1
-
-                if "tries" in flags.keys() and not "delay" in flags.keys():
-                    flags["delay"] = 120
+                try:
+                    if flags["all"] and flags["any"]:
+                        handle_exception("Providing both 'all' and 'any' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
+                except KeyError:
+                    pass
 
             else:
                 # default is 'all'
-                flags["multiple"] = True
+                pass
     
             # split commands on 'cmd:', and filter out any empty elements
             cmd_segments = filter(bool, re.split(" ?cmd:", tmp_command, flags=re.IGNORECASE))

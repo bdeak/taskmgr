@@ -57,10 +57,17 @@ def check_node_active():
         try:
             number_resources = int(root.find('.//resources/group').attrib['number_resources'])
         except Exception as e:
-            raise RuntimeError("Failed to get the number of resources from the xml output of crm_mon: %s" % str(e))
+            l.debug("Failed to read number_resources from xml output. The xml output was:")
+            l.debug(result)
+            #raise RuntimeError("Failed to get the number of resources from the xml output of crm_mon: %s" % str(e))
+            pass
 
-        for e in root.findall('.//resources/group/*/node'):
-            nodes.append(e.attrib["name"])
+        try:
+            for e in root.findall('.//resources/group/*/node'):
+                nodes.append(e.attrib["name"])
+        except Exception as e:
+            # don't raise an exception, possibly there's a failover ongoing
+            return False
 
         # get rid of duplicates
         nodes_unique = set(nodes)
