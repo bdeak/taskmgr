@@ -30,7 +30,7 @@ def check(input_params, cluster):
 
     """
     # split up the input_params, and make sense of it
-    m = re.search("^([0-9.]+)([dwms])?(?::([0-9.]+)?([dwms])?)?$", input_params)
+    m = re.search("^([0-9.]+)([wdhms])?(?::([0-9.]+)?([wdhms])?)?$", input_params)
     if not m:
         raise AttributeError("The given input_params '%s' doesn't match the requirements!" % input_params)
     value, unit, sleep, sleep_unit = m.groups()

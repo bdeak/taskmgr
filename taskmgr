@@ -146,13 +146,26 @@ class TaskMgr(object):
             # expand the expression found in cluster.ini using bash - might need to rewrite this in pure python?
             hosts = list()
             try:
+                # iterate on patterns, to use the ordering of patterns instead the ordering of host sin hosts_file
+                # (allows some room for trickery like even-odd handling)
                 f = open(self.args.hosts_file)
-                for host in f.readlines():
-                    if re.search("(^\s*$|^#)", host):
-                        continue
-                    for pattern in self.config["cluster"][cluster]["pattern"].split(" "):
+                hostfile_contents = f.readlines()
+                for pattern in self.config["cluster"][cluster]["pattern"].split(" "):
+                    for host in hostfile_contents:
+                        if re.search("(^\s*$|^#)", host):
+                            continue
                         if re.search(pattern, host, flags=re.IGNORECASE):
                             hosts.append(host.rstrip())
+
+                # use this to preserve ordering from hosts_file
+                #f = open(self.args.hosts_file)
+                #for host in f.readlines():
+                #    if re.search("(^\s*$|^#)", host):
+                #        continue
+                #    for pattern in self.config["cluster"][cluster]["pattern"].split(" "):
+                #        if re.search(pattern, host, flags=re.IGNORECASE):
+                #            hosts.append(host.rstrip())
+
             except Exception as e: 
                 handle_exception("Problem while reading host file '%s': %s" % (self.args.hosts_file, str(e)))
         return hosts
@@ -187,7 +200,7 @@ class TaskMgr(object):
         for cluster in sorted(self.clusters):
             hosts.append(self.get_node_list_for_cluster(cluster))
         # return a flattened list (instead of lists of lists)
-        return sorted([item for sublist in hosts for item in sublist])
+        return [item for sublist in hosts for item in sublist]
 
 
     def read_ssh_config(self):
