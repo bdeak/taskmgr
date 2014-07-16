@@ -14,7 +14,7 @@ def check(input_params, cluster):
     """ Check the uptime for a machine and compare it against a pre-defined value
     
         input_params parameter is a string, with the following fields:
-        uptime[unit]|[sleep_before_returning]
+        uptime[unit]:[sleep_before_returning]
 
         Example:
         1d|2h
