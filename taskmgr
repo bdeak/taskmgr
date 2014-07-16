@@ -776,7 +776,7 @@ class AsyncWorker:
     def add_job(self, host, cluster, config, args):
         self.job_queue.put((host, cluster, config, args))
 
-    def start_workers(self, worker_func, max_parallel):
+    def start_workers(self, worker_func, max_parallel=1):
 
         # if number of elements in the job queue (for this cluster) are smaller than the parallel level,
         # don't start as much workers
