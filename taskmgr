@@ -370,7 +370,7 @@ def worker(host, cluster, config, args):
         # set defaults for all flags
         flags = dict()
         flags["skip"] = False
-        flags["stop"] = True
+        flags["stop"] = False
         flags["negate"] = False
         flags["multiple"] = True
         flags["tries"] = 1
@@ -402,9 +402,12 @@ def worker(host, cluster, config, args):
                             # booleans
                             flags[flag] = True
 
+                if flags["skip"] != True:
+                    flags["stop"] == True
+
                 # sanity checking, set defaults
                 try:
-                    if flags["skip"] and flags["stop"]:
+                    if flags["skip"] == True and flags["stop"] == True:
                         handle_exception("Providing both 'skip' and 'stop' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
                 except KeyError:
                     pass
@@ -445,9 +448,12 @@ def worker(host, cluster, config, args):
                         # booleans
                         flags[flag] = True
 
+            if flags["skip"] != True:
+                flags["stop"] == True
+
             # sanity checking, set defaults
             try:
-                if flags["skip"] and flags["stop"]:
+                if flags["skip"] == True and flags["stop"] == True:
                     handle_exception("Providing both 'skip' and 'stop' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
             except KeyError:
                 pass
@@ -993,11 +999,11 @@ if __name__ == '__main__':
             print ""
             while True:
                 answer = raw_input("Are you sure you want to continue? [y/N]").rstrip("\n")
-                if not answer:
+                if not answer or answer.lower() == "n":
                     l.info("User abort, exiting.")
                     print ""
                     sys.exit(1)
-                if answer == "y":
+                if answer.lower() == "y":
                     l.info("User answered yes, going on")
                     print ""
                     break
