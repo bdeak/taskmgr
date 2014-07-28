@@ -139,8 +139,11 @@ class TaskMgr(object):
 
         # check if a hostlist was provided
         if not self.args.hosts_file:
-            # not provided, use the hostnames defined in cluster.ini
-            hosts = subprocess.Popen(["/bin/bash", "-c", "echo %s" % self.config["cluster"][cluster]['hosts']], stdout=subprocess.PIPE).communicate()[0].rstrip().split(" ")
+            if not "hosts" in self.config["cluster"]:
+                handle_exception("Either a host file (-H) and pattern, or a 'nodes' definition must be provided to identify cluster members! (cluster: %s)" % cluster)
+            else:
+                # not provided, use the hostnames defined in cluster.ini
+                hosts = subprocess.Popen(["/bin/bash", "-c", "echo %s" % self.config["cluster"][cluster]['hosts']], stdout=subprocess.PIPE).communicate()[0].rstrip().split(" ")
         else:
             # get the hosts from the host file which are matching the pattern given for the current cluster in cluster.ini
             # expand the expression found in cluster.ini using bash - might need to rewrite this in pure python?
