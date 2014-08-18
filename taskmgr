@@ -373,7 +373,6 @@ def worker(host, cluster, config, args):
         # set defaults for all flags
         flags = dict()
         flags["skip"] = False
-        flags["stop"] = False
         flags["negate"] = False
         flags["multiple"] = True
         flags["tries"] = 1
@@ -404,16 +403,6 @@ def worker(host, cluster, config, args):
                         else:
                             # booleans
                             flags[flag] = True
-
-                if flags["skip"] != True:
-                    flags["stop"] == True
-
-                # sanity checking, set defaults
-                try:
-                    if flags["skip"] == True and flags["stop"] == True:
-                        handle_exception("Providing both 'skip' and 'stop' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
-                except KeyError:
-                    pass
 
                 # sanity checking, set defaults
                 if "any" in flags.keys():
@@ -450,16 +439,6 @@ def worker(host, cluster, config, args):
                     else:
                         # booleans
                         flags[flag] = True
-
-            if flags["skip"] != True:
-                flags["stop"] == True
-
-            # sanity checking, set defaults
-            try:
-                if flags["skip"] == True and flags["stop"] == True:
-                    handle_exception("Providing both 'skip' and 'stop' flags doesn't make any sense! (%s: %s)" % (args.command, command), host, cluster)
-            except KeyError:
-                pass
 
             if negate:
                 flags["negate"] = True
@@ -538,8 +517,8 @@ def worker(host, cluster, config, args):
                 if flags["skip"]:
                     l.warning("Error action for %s '%s' is 'skip', moving on with next host" % (action, cmd_name), host, cluster)
                     return (host, cluster, False)
-                elif flags["stop"]:
-                    raise StopException("Requested action for %s %s on %s/%s is '%s'" %(action, cmd_name, cluster, host, flags))
+                else:
+                    raise StopException("Requested action for %s %s on %s/%s is 'stop'" %(action, cmd_name, cluster, host))
             else:
                 l.info("%s '%s' OK" % (action, cmd_name), host, cluster)
         
@@ -574,8 +553,8 @@ def worker(host, cluster, config, args):
                         if flags["skip"]:
                             l.warning("Error action for %s '%s' is 'skip', moving on with next host, but not stopping" % (action, cmd_name), host, cluster)
                             return (host, cluster, False)
-                        elif flags["stop"]:
-                            raise StopException("Requested action for %s %s on %s/%s is '%s'" %(action, cmd_name, cluster, host, flags))
+                        else:
+                            raise StopException("Requested action for %s %s on %s/%s is 'stop'" %(action, cmd_name, cluster, host))
                     else:
                         # retry
                         l.warning("%s '%s' failed, but retrying %d more time(s) after %d seconds of delay" % (action, cmd_name, int(flags["tries"])-1-counter, int(flags["delay"])), host, cluster)

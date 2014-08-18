@@ -27,17 +27,17 @@ def check(input_params, cluster):
     method = input_params if input_params else "ssh"
 
     if method == "ssh":
-        return check_ssh()
+        return check_ssh(cluster)
     else:
-        return check_sudo()
+        return check_sudo(cluster)
 
 
-def check_ssh():
+def check_ssh(cluster):
     """ Do the actual ssh check """
     try:
-        with settings(combine_stderr=False):
-            result = run("uname")
-    except:
+        result = run("uname")
+    except Exception as e:
+        l.info("Received exception while executing 'uname': %s" % str(e), env.host_string, cluster)
         return False
 
     if result.succeeded:
@@ -45,12 +45,12 @@ def check_ssh():
     else:
         return False
 
-def check_sudo():
+def check_sudo(cluster):
     """ Do the actual sudo check """
     try:
-        with settings(combine_stderr=False):
-            result = sudo("uname")
-    except:
+        result = sudo("uname")
+    except Exception as e:
+        l.info("Received exception while executing 'sudo uname': %s" % str(e), env.host_string, cluster)
         return False
 
     if result.succeeded:

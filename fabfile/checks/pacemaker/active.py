@@ -5,6 +5,8 @@ import os.path
 
 import logging
 import utils.log
+from utils.functions import *
+
 
 import xml.etree.ElementTree as ET
 
@@ -35,6 +37,8 @@ def check(input_params, cluster):
 def check_node_active():
     """ Check if a node is online via crm_mon """
 
+    hostname = get_short_hostname(env.host_string)
+
     command = "/usr/sbin/crm_mon --one-shot --as-xml"
 
     try:
@@ -57,10 +61,10 @@ def check_node_active():
         try:
             number_resources = int(root.find('.//resources/group').attrib['number_resources'])
         except Exception as e:
-            l.debug("Failed to read number_resources from xml output. The xml output was:")
-            l.debug(result)
-            #raise RuntimeError("Failed to get the number of resources from the xml output of crm_mon: %s" % str(e))
-            pass
+            # the xml response doesn't contain the group - the node is not active
+            #l.debug("Failed to read number_resources from xml output. The xml output was:")
+            #l.debug(result)
+            return False
 
         try:
             for e in root.findall('.//resources/group/*/node'):
@@ -73,13 +77,13 @@ def check_node_active():
         nodes_unique = set(nodes)
 
         # check if the current node is in nodes
-        if env.host_string in nodes_unique:
+        if hostname in nodes_unique:
             # yes, it's an active node
             # there should be 'number_resources' many entries in 'nodes' of our hostname
-            if sum(x == env.host_string for x in nodes) == number_resources:
+            if sum(x == hostname for x in nodes) == number_resources:
                 return True
             else:
-                l.warning("Some resources are not active on this node, that should be. %d vs %d" % (sum(x == env.host_string for x in nodes), number_resources))
+                l.warning("Some resources are not active on this node, that should be. %d vs %d" % (sum(x == hostname for x in nodes), number_resources))
                 return False
         else:
             return False

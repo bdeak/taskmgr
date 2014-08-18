@@ -5,6 +5,7 @@ import os.path
 
 import logging
 import utils.log
+from utils.functions import *
 
 l = logging.getLogger()
 l = utils.log.CustomLogAdapter(l, None)
@@ -46,7 +47,8 @@ def check_node_online(cluster):
     else:
         # parse the output
         for line in result.split("\n"):
-            m = re.search("^Node %s (?:\([a-zA-Z0-9-]+\)): (.+)" % env.host_string, line, re.IGNORECASE)
+            line = line.rstrip()
+            m = re.search("^Node (?:%s|%s) (?:\([a-zA-Z0-9-]+\)): (.+)" % (env.host_string, get_short_hostname(env.host_string)), line, re.IGNORECASE)
             if m:
                 state = m.group(1).rstrip()
                 if state == "online":
@@ -54,7 +56,8 @@ def check_node_online(cluster):
                 else:
                     l.info("State is %s" % state, env.host_string, cluster)
                     return False
-        
 
         # if here, no matching lines were found, return an exception
-        raise RuntimeError("%s: can't determine the status based on the crm_mon output, no matching line was found!" % (env.command, command))#
+        raise RuntimeError("%s: can't determine the status based on the crm_mon output, no matching line was found!" % env.command)
+
+
