@@ -9,7 +9,7 @@ l = logging.getLogger()
 l = utils.log.CustomLogAdapter(l, None)
 
 @task(default=True)
-def custom_cmd(input_params, cluster):
+def custom_command(input_params, cluster):
     """ Execute a custom command
 
         input_params parameter is a string, with the following fields:
@@ -22,6 +22,7 @@ def custom_cmd(input_params, cluster):
     # split up the input_params, and make sense of it
     with_sudo, command, exit_codes_array = parse(input_params)
 
+    ok_ret_codes = env.ok_ret_codes
     # tell fabric which return codes we interpret as 'ok'
     env.ok_ret_codes = exit_codes_array
 
@@ -31,14 +32,17 @@ def custom_cmd(input_params, cluster):
             l.debug("Executing: '%s'" % command, env.host_string, cluster)
             result = run(command)
         except:
+            env.ok_ret_codes = ok_ret_codes
             return False
     else:
         try:
             l.debug("Executing via sudo: '%s'" % command, env.host_string, cluster)
             result = sudo(command)
         except Exception as e:
+            env.ok_ret_codes = ok_ret_codes
             return False
 
+    env.ok_ret_codes = ok_ret_codes
     if result.succeeded:
         return True
     else:

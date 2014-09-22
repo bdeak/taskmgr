@@ -139,8 +139,8 @@ class TaskMgr(object):
 
         # check if a hostlist was provided
         if not self.args.hosts_file:
-            if not "hosts" in self.config["cluster"]:
-                handle_exception("Either a host file (-H) and pattern, or a 'nodes' definition must be provided to identify cluster members! (cluster: %s)" % cluster)
+            if not "hosts" in self.config["cluster"][cluster]:
+                handle_exception("Either a host file (-H) and pattern, or a 'hosts' definition must be provided to identify cluster members! (cluster: %s)" % cluster)
             else:
                 # not provided, use the hostnames defined in cluster.ini
                 hosts = subprocess.Popen(["/bin/bash", "-c", "echo %s" % self.config["cluster"][cluster]['hosts']], stdout=subprocess.PIPE).communicate()[0].rstrip().split(" ")
@@ -955,28 +955,28 @@ if __name__ == '__main__':
     # look at the parsed commands file for the requested command, and check for custom_cmd entries.
     # if found, print them and ask for user confirmation (unless --force is used) before continuing
     if not args.force:
-        custom_cmds = list()
+        custom_commands = list()
         for cmd in config["command"][args.command]:
-            if re.search("custom_cmd", cmd):
+            if re.search("custom_command", cmd):
                 m = re.search("^([^ ]+)(?: (not))?( cmd:[^\]]+)(?: \[([^\]]+)])?\s*$", cmd)
                 if m:
                     cmd_segments = filter(bool, re.split(" cmd:[^:]+:", m.group(3), flags=re.IGNORECASE))
                     for segment in cmd_segments:
                         with quiet():
                             l.debug("calling with: %s" % segment)
-                            custom_cmds.append(execute("execute.custom_cmd.parse", segment, host="localhost")["localhost"][1])
+                            custom_commands.append(execute("execute.custom_cmd.parse", segment, host="localhost")["localhost"][1])
                 else:
                     # ask question, can't parse, might mean problems
                     l.warning("Custom_cmd found, but failed to parse line.")
-                    custom.cmds.append(None)
-        if len(custom_cmds):
+                    custom_commands.append(None)
+        if len(custom_commands):
             # there was at least custom command, or unparseable line
 
             # get rid of unique elements
-            custom_cmds = set(custom_cmds)
+            custom_commands = set(custom_commands)
             l.warning("Warning: The following custom commands have been found that will be executed: ")
             print ""
-            for cmd in custom_cmds:
+            for cmd in custom_commands:
                 print cmd
             print ""
             while True:

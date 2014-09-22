@@ -65,7 +65,7 @@ def simple(input_params, cluster):
         return False
 
     if result.failed:
-        raise RuntimeError("%s: There seems to be a problem with iptables" % env.command)
+        raise RuntimeError("%s: There seems to be a problem with iptables: %s" % (env.command, result))
     
 
     # add/remove firewall rules for allowing ourselves
