@@ -257,7 +257,15 @@ def exit_if_fatal(fatal=True):
         fabricnetwork.disconnect_all()
         sys.exit(1)
 
-
+# catch a SIGINT event (ctrl+c)
+def sigint_handler(signal, frame):
+    global ctrlc_count
+    if ctrlc_count > 0:
+        l.error("User interrupt via Ctrl+C")
+        exit_handler(1)
+    else:
+        l.warning("Ctrl+C press detected. If you really want to exit, press it again!")
+        ctrlc_count += 1
 
 def exit_handler(exit_code=None):
     global taskmgr
@@ -891,6 +899,7 @@ timeout = 10
 command_timeout = None
 pid = os.getpid()
 passwords = dict()
+ctrlc_count = 0
 
 # load available fabric task files 
 # http://stackoverflow.com/questions/23605418/in-fabric-how-can-i-execute-tasks-from-another-python-file
@@ -1002,6 +1011,9 @@ if __name__ == '__main__':
     if not os.path.exists(args.ssh_config):
         handle_exception("Provided ssh config file '%s' doesn't exist!" % args.ssh_config)
 
+    # set up signal handler for catching Ctrl+Cluster
+    signal.signal(signal.SIGINT, sigint_handler)
+
     # read the passwords for all users defined in ssh_config
     # fabric would do this, but because of parallel execution it doesn't always work
     users = taskmgr.get_ssh_users()
@@ -1051,17 +1063,12 @@ if __name__ == '__main__':
         # launch the workers
         async_worker.start_workers(worker, int(config["cluster"][cluster]["max_parallel"]))
 
-    try:
-        for cluster, async_worker in taskmgr.get_worker_pools().items():
-            l.debug("Waiting for cluster '%s' to finish" % cluster)
-            async_worker.wait()
-            l.debug("Cluster '%s' finished" % cluster)
-            # close all queues
-            async_worker.close_queues()
-    except KeyboardInterrupt:
-        print "Received Ctrl + C, exiting..."
-        # don't wait, just close queues
-        exit_handler(1)
+    for cluster, async_worker in taskmgr.get_worker_pools().items():
+        l.debug("Waiting for cluster '%s' to finish" % cluster)
+        async_worker.wait()
+        l.debug("Cluster '%s' finished" % cluster)
+        # close all queues
+        async_worker.close_queues()
 
     # close fabric ssh connections
     fabricnetwork.disconnect_all()
