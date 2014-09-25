@@ -22,6 +22,7 @@ import signal
 import getpass
 
 import multiprocessing
+from ctypes import c_bool, c_int, c_char
 import Queue
 
 
@@ -118,6 +119,7 @@ class TaskMgr(object):
         optional.add_argument("--show-exception", help="Show exception when tasks fail", action='store_true', default=False)
         optional.add_argument("--ssh-config", help="The ssh configuration file to use.", default="%s/.ssh/config" % os.environ["HOME"])
         optional.add_argument("-f", "--force", help="Use force, like not asking confirmation for custom commands", action="store_true", default=False)
+        optional.add_argument("-m", "--max-parallel", help="Override cluster defined max parallel setting -- DANGEROUS")
         optional.add_argument("--print-unprocessed", help="When using hostlist, print which hosts would not be processed due to lack of matching pattern", action="store_true", default=False)
         optional.add_argument("-v", "--version", action="version", version=__version__)
         optional.add_argument("-h", "--help", help="Show this help", action="help")
@@ -234,6 +236,58 @@ class TaskMgr(object):
     def set_clusters(self, clusters):
         self.clusters = clusters
 
+    def manage_user_actions(self):
+        """ Manage user actions in pause mode (after ctrl+c is pressed) """
+        global ctrlc_count
+        l = logging.getLogger()
+        l = utils.log.CustomLogAdapter(l, None)
+
+        # available commands:
+        # quit
+        # continue
+        # cancel cluster
+        # print help
+        # hold cluster
+        # list held clusters
+        # print statistics
+        l.info("=" * 100)
+        while True:
+            sys.stdout.write("Choose your action: [(Q)uit|(R)esume|(C)ancel cluster|(H)elp] ")
+            answer = raw_input().rstrip("\n")
+            if not answer:
+                continue
+            if answer.lower() == "q":
+                exit_handler(1)
+            elif answer.lower() == "c":
+                self.user_action_cancel(l)
+            elif answer.lower() == "r":
+                l.important("Resuming the execution of the tasks")
+                ctrlc_count -= 1
+                for c, p in self.get_worker_pools().items():
+                    p.pause_execution(False)
+                break
+            else:
+                # unknown option was chosen
+                continue
+
+    def user_action_cancel(self, l):
+        """ Cancel a given cluster execution """
+        l.info("-" * 80)
+        l.info("Please provide which cluster you want to cancel.")
+        l.info("Available clusters still not finished:")
+        for c, p in self.get_worker_pools().items():
+            if not p.is_finished():
+                l.info(c)
+        sys.stdout.write("Cluster to cancel > ")
+        answer = raw_input().rstrip("\n")
+        try:
+            self.get_worker_pools()[answer].finish()
+            l.important("Execution of cluster %s is cancelled" % cluster)
+        except KeyError:
+            l.info("Unknown cluster %s" % cluster)
+        #for cluster, async_worker in taskmgr.get_worker_pools().items():
+
+
 def handle_exception(exception, *args, **kwargs):
     global pid
     if "fatal" in kwargs.keys():
@@ -260,12 +314,23 @@ def exit_if_fatal(fatal=True):
 # catch a SIGINT event (ctrl+c)
 def sigint_handler(signal, frame):
     global ctrlc_count
-    if ctrlc_count > 0:
-        l.error("User interrupt via Ctrl+C")
-        exit_handler(1)
-    else:
-        l.warning("Ctrl+C press detected. If you really want to exit, press it again!")
+    if ctrlc_count == 0:
         ctrlc_count += 1
+        l.warning("Ctrl+C press detected, entering Pause Mode")
+        for cluster, async_worker in taskmgr.get_worker_pools().items():
+            l.debug("Sending Pause signal for cluster %s" % cluster)
+            async_worker.pause_execution(True)
+        # wait until all of the workers are paused
+        for cluster, async_worker in taskmgr.get_worker_pools().items():
+            l.debug("Waiting for cluster %s to pause" % cluster, "-", cluster)
+            async_worker.wait_until_paused()
+        l.important("All workers are now paused")
+        taskmgr.manage_user_actions()
+
+    else:
+        l.error("User interrupt via Ctrl+C again, quiting completely")
+        exit_handler(1)
+
 
 def exit_handler(exit_code=None):
     global taskmgr
@@ -559,7 +624,7 @@ def worker(host, cluster, config, args):
                         # last try
                         l.error("%s '%s' failed" % (action, cmd_name), host, cluster)
                         if flags["skip"]:
-                            l.warning("Error action for %s '%s' is 'skip', moving on with next host, but not stopping" % (action, cmd_name), host, cluster)
+                            l.warning("Error action for %s '%s' is 'skip', moving on with next host, without stopping" % (action, cmd_name), host, cluster)
                             return (host, cluster, False)
                         else:
                             raise StopException("Requested action for %s %s on %s/%s is 'stop'" %(action, cmd_name, cluster, host))
@@ -774,35 +839,60 @@ def run_execute_tasks(host, cluster, cmd_name, cmd_segments, flags):
 # we need our own pool management
 # http://bryceboe.com/2010/08/26/python-multiprocessing-and-keyboardinterrupt/
 class AsyncWorker:
-    def __init__(self, cluster, show_exception=False):
+    def __init__(self, cluster, show_exception=False, max_parallel=1):
         self.job_queue = multiprocessing.Queue()
         self.result_queue = multiprocessing.Queue() 
-        self.workers = list()
+        self.workers = dict()
+        # shared object storing worker states
+        # available states: 1: started, 2: paused, 3: finished
         self.failed_clusters = dict()
         self.show_exception = show_exception
         self.cluster = cluster
+        # send the pause event with this shared value
+        self.pause_indicator = multiprocessing.Value(c_bool, False, lock=True)
+        self.paused = multiprocessing.Value(c_bool, False, lock=True)
+        self.finished = False
+        self.max_parallel = max_parallel
 
     def add_job(self, host, cluster, config, args):
         self.job_queue.put((host, cluster, config, args))
 
-    def start_workers(self, worker_func, max_parallel=1):
+    def start_workers(self, worker_func):
 
         # if number of elements in the job queue (for this cluster) are smaller than the parallel level,
         # don't start as much workers
         # the qsize() method doesn't return a reliable number, but at this point no other processes should be
         # putting anything to the job queue for this cluster worker
-        if self.job_queue.qsize() > max_parallel:
-            iterrate = max_parallel
-        else:
-            iterrate = self.job_queue.qsize()
-
-        for i in range(iterrate):
-            w = multiprocessing.Process(target=self._worker_helper, args=(worker_func,))
+        if self.job_queue.qsize() < self.max_parallel:
+            self.max_parallel = self.job_queue.qsize()
+        self.workers_shared = multiprocessing.Array(c_int, range(self.max_parallel), lock=True)        
+        for worker_index in range(self.max_parallel):
+            w = multiprocessing.Process(target=self._worker_helper, args=(worker_func, worker_index))
             w.daemon = True
             w.start()
-            self.workers.append(w)
+            with self.workers_shared.get_lock():
+                self.workers_shared[worker_index] = 1
+            self.workers[worker_index] = w
 
-    def _worker_helper(self, worker_func):
+    def pause_execution(self, direction=True):
+        with self.pause_indicator.get_lock():
+            self.pause_indicator.value = direction
+        #if not direction:
+        #    with self.workers_shared.get_lock():
+        #        for w in self.workers_shared:
+        #            w = 1
+
+    def wait_until_paused(self):
+        while not self.paused.value:
+            if 1 in self.workers_shared or 3 in self.workers_shared:
+                time.sleep(1)
+            else:
+                with self.paused.get_lock():
+                    self.paused.value = True
+                break
+        return True
+
+    def _worker_helper(self, worker_func, worker_index):
         while True:
             try:
                 # get a new element from the queue
@@ -836,12 +926,25 @@ class AsyncWorker:
                     pass
 
                 # if here, start the task
-                l.debug("Starting worker", host, cluster)
-                self.result_queue.put(worker_func(host, cluster, config, args)) # put the results to the queue
+                if not self.pause_indicator.value:
+                    l.debug("Starting worker", host, cluster)
+                    self.result_queue.put(worker_func(host, cluster, config, args)) # put the results to the queue
+                else:
+                    l.warning("Paused worker '%d' for cluster" % worker_index, "-", cluster)
+                    # wait here until unpaused
+                    while self.pause_indicator.value:
+                        time.sleep(0.3)
 
             except Queue.Empty:
-                l.debug("Queue is empty, exiting from _worker_helper()", "-", self.cluster)
-                break
+                # check if the queue empty because we are paused
+                if self.pause_indicator.value:
+                    # flag the current worker as paused
+                    with self.workers_shared.get_lock():
+                        self.workers_shared[worker_index] = 2
+                    continue
+                else:
+                    l.debug("Queue is empty, exiting from _worker_helper()", "-", self.cluster)
+                    break
             except KeyboardInterrupt:
                 pass
             except Exception as e:
@@ -868,9 +971,19 @@ class AsyncWorker:
                 if not host in self.failed_clusters[cluster].keys():
                     self.failed_clusters[cluster][host] = False
 
-    def wait(self):
-        for worker in self.workers:
-            worker.join()
+    def is_finished(self):
+        if self.finished:
+            return True
+        # if the number of workers smaller than the maximal parallel count, 
+        # then not all workers have been started yet
+        if len(self.workers.keys()) < self.max_parallel:
+            return False
+        for index, worker in self.workers.items():
+            worker.join(0.3)
+            if worker.is_alive():
+                return False
+        self.finished = True
+        return True
 
     def finish(self):
         for worker in self.workers:
@@ -1052,7 +1165,12 @@ if __name__ == '__main__':
     for cluster in clusters:
         hosts = taskmgr.get_node_list_for_cluster(cluster)
 
-        async_worker = AsyncWorker(cluster, args.show_exception)
+        if args.max_parallel:
+            max_parallel = int(args.max_parallel)
+        else:
+            max_parallel = int(config["cluster"][cluster]["max_parallel"])
+
+        async_worker = AsyncWorker(cluster, args.show_exception, max_parallel)
         taskmgr.append_worker_pool(cluster, async_worker)
 
         # launch workers
@@ -1061,14 +1179,21 @@ if __name__ == '__main__':
             async_worker.add_job(host, cluster, config, args)
 
         # launch the workers
-        async_worker.start_workers(worker, int(config["cluster"][cluster]["max_parallel"]))
+        async_worker.start_workers(worker)
 
-    for cluster, async_worker in taskmgr.get_worker_pools().items():
-        l.debug("Waiting for cluster '%s' to finish" % cluster)
-        async_worker.wait()
-        l.debug("Cluster '%s' finished" % cluster)
-        # close all queues
-        async_worker.close_queues()
+    workers_finished = list()
+    while len(workers_finished) < len(taskmgr.get_worker_pools().keys()):
+        for cluster, async_worker in taskmgr.get_worker_pools().items():
+            l.trace("Waiting for cluster '%s' to finish" % cluster)
+            if async_worker.is_finished():
+                if not cluster in workers_finished:
+                    workers_finished.append(cluster)
+                    l.debug("Cluster '%s' finished" % cluster)
+                    # close all queues
+                    async_worker.close_queues()
+                    #async_worker.wait_until_finished()
+
+    l.debug("all finished")
 
     # close fabric ssh connections
     fabricnetwork.disconnect_all()

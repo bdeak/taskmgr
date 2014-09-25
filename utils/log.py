@@ -9,7 +9,18 @@ def important(self, message, *args, **kwargs):
     if self.isEnabledFor(IMPORTANT_LEVEL_NUM):
         self._log(IMPORTANT_LEVEL_NUM, message, args, **kwargs)
 
+
 logging.Logger.important = important
+
+TRACE_LEVEL_NUM = 5
+logging.addLevelName(TRACE_LEVEL_NUM, "TRACE")
+def trace(self, message, *args, **kwargs):
+    if self.isEnabledFor(TRACE_LEVEL_NUM):
+        self._log(TRACE_LEVEL_NUM, message, args, **kwargs)
+
+
+logging.Logger.trace = trace
+
 
 # adapter to dynamically add context information (cluster/host) to log
 # messages, if provided
@@ -69,6 +80,14 @@ class CustomLogAdapter(logging.LoggerAdapter):
         """
         msg, args, kwargs = self.process(msg, *args, **kwargs)
         self.logger.important(msg, *args, **kwargs)
+
+    def trace(self, msg, *args, **kwargs):
+        """
+        Delegate a important call to the underlying logger, after adding
+        contextual information from this adapter instance.
+        """
+        msg, args, kwargs = self.process(msg, *args, **kwargs)
+        self.logger.trace(msg, *args, **kwargs)
 
     def process(self, msg, *args, **kwargs):
         if not "extra" in kwargs:
