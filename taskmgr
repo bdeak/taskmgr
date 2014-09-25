@@ -850,7 +850,6 @@ class AsyncWorker:
         self.cluster = cluster
         # send the pause event with this shared value
         self.pause_indicator = multiprocessing.Value(c_bool, False, lock=True)
-        self.paused = multiprocessing.Value(c_bool, False, lock=True)
         self.finished = False
         self.max_parallel = max_parallel
 
@@ -877,18 +876,19 @@ class AsyncWorker:
     def pause_execution(self, direction=True):
         with self.pause_indicator.get_lock():
             self.pause_indicator.value = direction
-        #if not direction:
-        #    with self.workers_shared.get_lock():
-        #        for w in self.workers_shared:
-        #            w = 1
+        if not direction:
+            with self.workers_shared.get_lock():
+                index = 0
+                for w in self.workers_shared:
+                    if w == 2:
+                        self.workers_shared[index] = 1
+                    index += 1
 
     def wait_until_paused(self):
-        while not self.paused.value:
-            if 1 in self.workers_shared or 3 in self.workers_shared:
+        while True:
+            if 1 in self.workers_shared:
                 time.sleep(1)
             else:
-                with self.paused.get_lock():
-                    self.paused.value = True
                 break
         return True
 
@@ -931,20 +931,26 @@ class AsyncWorker:
                     self.result_queue.put(worker_func(host, cluster, config, args)) # put the results to the queue
                 else:
                     l.warning("Paused worker '%d' for cluster" % worker_index, "-", cluster)
-                    # wait here until unpaused
+                    # flag the current worker as paused
+                    with self.workers_shared.get_lock():
+                        self.workers_shared[worker_index] = 2
+                    # wait here until unpaused                        
                     while self.pause_indicator.value:
                         time.sleep(0.3)
 
             except Queue.Empty:
                 # check if the queue empty because we are paused
-                if self.pause_indicator.value:
-                    # flag the current worker as paused
-                    with self.workers_shared.get_lock():
-                        self.workers_shared[worker_index] = 2
-                    continue
-                else:
-                    l.debug("Queue is empty, exiting from _worker_helper()", "-", self.cluster)
-                    break
+                #if self.pause_indicator.value:
+                #    l.warning("in here")
+                #    if self.workers_shared[worker_index] != 2:
+                #        # flag the current worker as paused
+                #        with self.workers_shared.get_lock():
+                #            self.workers_shared[worker_index] = 2
+                #            l.warning("added with index %d" % worker_index)
+                #    continue
+                #else:
+                l.debug("Queue is empty, exiting from _worker_helper()", "-", self.cluster)
+                break
             except KeyboardInterrupt:
                 pass
             except Exception as e:
@@ -982,11 +988,14 @@ class AsyncWorker:
             worker.join(0.3)
             if worker.is_alive():
                 return False
+            else:
+                with self.workers_shared.get_lock():
+                    self.workers_shared[index] = 3
         self.finished = True
         return True
 
     def finish(self):
-        for worker in self.workers:
+        for index, worker in self.workers.items():
             worker.terminate()
             worker.join()
 

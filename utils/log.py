@@ -1,5 +1,6 @@
 import logging
 import sys
+import signal
 
 # create own loglevel 'important' for showing important information with coloring
 # http://stackoverflow.com/a/13638084
@@ -20,6 +21,8 @@ def trace(self, message, *args, **kwargs):
 
 
 logging.Logger.trace = trace
+
+signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
 # adapter to dynamically add context information (cluster/host) to log
