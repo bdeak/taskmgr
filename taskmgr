@@ -113,7 +113,7 @@ class TaskMgr(object):
         optional.add_argument("--cluster-config", help="The location of the cluster configuration file", default="cluster.ini")
         optional.add_argument("--command-config", help="The location of the command configuration file", default="commands.ini")
         optional.add_argument("--config", help="The location of the taskmgr configuration file", default="config.ini")      
-        optional.add_argument("-H", "--hosts-file", help="File storing the hosts to work on, one by line. If not used, the hostnames from cluster.ini are used.") # fixme
+        optional.add_argument("-H", "--hosts-file", help="File storing the hosts to work on, one by line. If not used, the hostnames from cluster.ini are used.")
         optional.add_argument("-d", "--debug", help="Show debug information", action="store_true", default=False)
         optional.add_argument("-x", "--unsafe", help="Enable unsafe operation. (disable host key checking, etc)", action='store_true', default=False)
         optional.add_argument("--show-exception", help="Show exception when tasks fail", action='store_true', default=False)
@@ -1297,7 +1297,6 @@ if __name__ == '__main__':
                     l.debug("Cluster '%s' finished" % cluster)
                     # close all queues
                     async_worker.close_queues()
-                    #async_worker.wait_until_finished()
 
     l.debug("all finished")
 

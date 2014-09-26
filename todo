@@ -1,13 +1,10 @@
-implement graceful stop with ctrl c, first time stop sending new jobs, second time quit completely
 fix logging with multiprocessing -> allegedly needs locking
 make wait time a parameter
 check process running
 check memcached via port
-print progress, enable with switch
 --nocolor?
 --trace?
 fix information display, on fail show arguments, etc
-fix if no host file and no pattern is given
 implement if clause
 implement while clause?
 check service
@@ -24,3 +21,6 @@ missing checks should be always OK (or error, configurable)
 if skipped host, don't say all was fine
 add pacemaker checks and commands
 add galera checks
+implement graceful stop with ctrl c, first time stop sending new jobs, second time quit completely
+print progress, enable with switch
+fix if no host file and no pattern is given
