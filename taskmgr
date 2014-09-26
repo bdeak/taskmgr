@@ -22,11 +22,11 @@ import signal
 import getpass
 
 import multiprocessing
-from ctypes import c_bool, c_int, c_char
+from ctypes import c_bool, c_int
 import Queue
 
 
-__version__ = "0.7.0"
+__version__ = "0.9.0"
 
 class OperationException(Exception):
     pass
@@ -252,7 +252,7 @@ class TaskMgr(object):
         # print statistics
         l.info("=" * 100)
         while True:
-            sys.stdout.write("Choose your action: [(Q)uit|(R)esume|(C)ancel cluster] ")
+            sys.stdout.write("Choose your action: [(Q)uit|(R)esume|(C)ancel cluster|(S)tatistics|(E)xtended statistics] ")
             answer = raw_input().rstrip("\n")
             if not answer:
                 continue
@@ -261,14 +261,37 @@ class TaskMgr(object):
             elif answer.lower() == "c":
                 self.user_action_cancel(l)
             elif answer.lower() == "r":
-                l.important("Resuming the execution of the tasks")
-                ctrlc_count -= 1
-                for c, p in self.get_worker_pools().items():
-                    p.pause_execution(False)
+                self.user_action_resume(l)
                 break
+            elif answer.lower() == "s":
+                self.user_action_statistics(l)
+            elif answer.lower() == "e":
+                self.user_action_extended_statistics(l)
             else:
                 # unknown option was chosen
                 continue
+
+    def user_action_statistics(self, l):
+        """ print the statistics of task executions for all clusters during pause mode """
+        results = dict()
+        jobs = dict()
+
+        results_flat, results_ok, results_failed, skipped_list, jobs = self.print_statistics(True, False)
+
+    def user_action_extended_statistics(self, l):
+        """ print the extendedy statistics of task executions for all clusters during pause mode """
+        results = dict()
+        jobs = dict()
+
+        results_flat, results_ok, results_failed, skipped_list, jobs = self.print_statistics(True, True)
+
+    def user_action_resume(self, l):
+        """ resume task execution (exit pause mode) """
+        global ctrlc_count
+        l.important("Resuming the execution of the tasks")
+        ctrlc_count -= 1
+        for c, p in self.get_worker_pools().items():
+            p.pause_execution(False)
 
     def user_action_cancel(self, l):
         """ Cancel a given cluster execution """
@@ -303,8 +326,81 @@ class TaskMgr(object):
         except KeyError:
             l.info("Unknown cluster %s" % key)
             return False
-        #for cluster, async_worker in taskmgr.get_worker_pools().items():
 
+
+    def print_statistics(self, print_results=True, print_detailed=True):
+        results = dict()
+        jobs = dict()
+        actual_list = list()
+
+        # get the result queue contents
+        for cluster, worker in self.get_worker_pools().items():
+            for host, result in worker.get_result_queue_contents():
+                if not cluster in results:
+                    results[cluster] = dict()
+                results[cluster][host] = result
+                actual_list.append(host)
+
+            # get the job queue contents also
+            for host in worker.get_job_queue_contents():
+                if not cluster in jobs:
+                    jobs[cluster] = list()
+                jobs[cluster].append(host)
+
+        results_flat = [host for cluster in results.itervalues() for host in cluster.itervalues()]
+        results_ok = [i for i in results_flat if i == True]
+        results_failed = [i for i in results_flat if i == False]
+        jobs_flat = [host for cluster in jobs.itervalues() for host in cluster]
+
+        expected_list = taskmgr.get_full_node_list()
+        # get the difference of the expected and the actual lists
+        # danger: this will kill ordering (ok), and remove unique elements (should be ok, one host should only be part of one cluster)
+        skipped_list = sorted(list(set(expected_list) - set(actual_list)))
+
+        if print_results:
+            if len(results_flat) > 0:
+                l.info("=" * 80)
+                l.info("Statistics: ")
+                l.info("")
+                l.info("Expected: %d" % len(expected_list))
+                l.info('Total: %d' % len(results_flat))
+                l.info('OK: %d/%0.2f%% |  Failed: %d/%0.2f%%' % (len(results_ok), float(len(results_ok))/float(len(results_flat))*100, len(results_failed), float(len(results_failed))/float(len(results_flat))*100))
+
+                if len(jobs_flat):
+                    l.info("Remaining hosts: %d" % len(jobs_flat))
+                    l.info("")                
+
+                if print_detailed and len(results_failed):
+                    l.info("")
+                    l.info("-" * 60)
+                    l.info("Failed hosts:")
+                    for cluster in sorted(results.keys()):
+                        for host in sorted(results[cluster].keys()):
+                            if results[cluster][host] == False:
+                                l.info("%s / %s" % (cluster, host))
+
+        
+        if print_detailed:
+            if len(skipped_list) and not len(jobs_flat):
+                l.info("")
+                l.info("-" * 60)
+                l.info("Skipped hosts:")
+                for host in skipped_list:
+                    l.info(host)
+
+            if len(jobs_flat):
+                l.info("")
+                l.info("-" * 60)
+                l.info("Remaining hosts: ")
+                for c in jobs.keys():
+                    l.info("-" * 40)
+                    l.info("%s:" % c)
+                    for host in jobs[c]:
+                        l.info("%s" % host)
+                    l.info("")
+                    
+
+        return (results_flat, results_ok, results_failed, skipped_list, jobs)
 
 def handle_exception(exception, *args, **kwargs):
     global pid
@@ -361,7 +457,7 @@ def exit_handler(exit_code=None):
     fabricnetwork.disconnect_all()
 
     if exit_code is None or exit_code == 0:
-        results_flat, results_ok, results_failed = print_statistics()
+        results_flat, results_ok, results_failed, skipped_list, jobs = taskmgr.print_statistics()
         
         if exit_code is None:
             if len(results_failed):
@@ -372,52 +468,6 @@ def exit_handler(exit_code=None):
                 l.info("All was OK!")
     sys.exit(exit_code)
 
-def print_statistics():
-    global taskmgr
-    results = dict()
-    actual_list = list()
-
-    for cluster, async_worker in taskmgr.get_worker_pools().items():
-        while not async_worker.result_queue_empty():
-            host, cluster, result = async_worker.result_queue_get(block=True)
-            if not cluster in results:
-                results[cluster] = dict()
-            results[cluster][host] = result
-            actual_list.append(host)
-
-    results_flat = [host for cluster in results.itervalues() for host in cluster.itervalues()]
-    results_ok = [i for i in results_flat if i == True]
-    results_failed = [i for i in results_flat if i == False]
-
-    # fixme: print the list of nodes that were not executed, using a diff of the two lists
-    expected_list = taskmgr.get_full_node_list()
-    # get the difference of the expected and the actual lists
-    # danger: this will kill ordering (ok), and remove unique elements (should be ok, one host should only be part of one cluster)
-    skipped_list = sorted(list(set(expected_list) - set(actual_list)))
-
-    if len(results_flat) > 0:
-        l.info("=" * 80)
-        l.info("Statistics: ")
-        l.info("")
-        l.info("Expected: %d" % len(expected_list))
-        l.info('Total: %d' % len(results_flat))
-        l.info('OK: %d/%0.2f%% |  Failed: %d/%0.2f%%' % (len(results_ok), float(len(results_ok))/float(len(results_flat))*100, len(results_failed), float(len(results_failed))/float(len(results_flat))*100))
-        if len(results_failed):
-            l.info("")
-            l.info("-" * 60)
-            l.info("Failed hosts:")
-            for cluster in sorted(results.keys()):
-                for host in sorted(results[cluster].keys()):
-                    if results[cluster][host] == False:
-                        l.info("%s / %s" % (cluster, host))
-        if len(skipped_list):
-            l.info("")
-            l.info("-" * 60)
-            l.info("Skipped hosts:")
-            for host in skipped_list:
-                l.info(host)
-
-    return (results_flat, results_ok, results_failed, skipped_list)
 
 def worker(host, cluster, config, args):
     """ The worker function. This is the code that gets executed for each cluster/node combination.
@@ -891,6 +941,36 @@ class AsyncWorker:
                 self.workers_shared[worker_index] = 1
             self.workers[worker_index] = w
 
+    def get_result_queue_contents(self):
+        """ print the contents of the result queue """
+        tmpstorage = list()
+        results = list()
+        while not self.result_queue.empty():
+            host, cluster, result = self.result_queue.get(True)
+            tmpstorage.append((host, cluster, result))
+            results.append((host, result))
+
+        # re-add the contents to the queue
+        for t in tmpstorage:
+            self.result_queue.put(t)
+
+        return results
+
+    def get_job_queue_contents(self):
+        """ print the contents of the result queue """
+        tmpstorage = list()
+        results = list()
+        while not self.job_queue.empty():
+            host, cluster, config, args = self.job_queue.get(True)
+            tmpstorage.append((host, cluster, config, args))
+            results.append(host)
+
+        # re-add the contents to the queue
+        for t in tmpstorage:
+            self.job_queue.put(t)
+
+        return results
+
     def pause_execution(self, direction=True):
         with self.pause_indicator.get_lock():
             self.pause_indicator.value = direction
@@ -981,6 +1061,7 @@ class AsyncWorker:
                 # in this case put a result entry in the queue
                 self.result_queue.put((host, cluster, False))
                 
+                # FIXME - shouldn't this be also a shared array?
                 # add the given cluster/node to the faulty clusters list
                 # mark the cluster as faulty by creating the cluster key if it doesn't already exist
                 if not cluster in self.failed_clusters.keys():
@@ -1018,7 +1099,7 @@ class AsyncWorker:
     def result_queue_empty(self):
         return self.result_queue.empty()
 
-    def result_queue_get(self, block=False):
+    def result_queue_get(self, block=False):        
         return self.result_queue.get(block)
 
     def close_queues(self):
@@ -1223,7 +1304,7 @@ if __name__ == '__main__':
     # close fabric ssh connections
     fabricnetwork.disconnect_all()
 
-    results_flat, results_ok, results_failed, skipped_list = print_statistics()
+    results_flat, results_ok, results_failed, skipped_list, jobs = taskmgr.print_statistics()
     if len(results_flat) and not len(results_failed):
         if not len(skipped_list):
             exit_code = 0
