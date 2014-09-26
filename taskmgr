@@ -252,7 +252,7 @@ class TaskMgr(object):
         # print statistics
         l.info("=" * 100)
         while True:
-            sys.stdout.write("Choose your action: [(Q)uit|(R)esume|(C)ancel cluster|(H)elp] ")
+            sys.stdout.write("Choose your action: [(Q)uit|(R)esume|(C)ancel cluster] ")
             answer = raw_input().rstrip("\n")
             if not answer:
                 continue
@@ -965,13 +965,6 @@ class AsyncWorker:
                             self.workers_shared[worker_index] = 2
                     continue
                 else:
-                    #    if self.workers_shared[worker_index] != 2:
-                    #        # flag the current worker as paused
-                    #        with self.workers_shared.get_lock():
-                    #            self.workers_shared[worker_index] = 2
-                    #            l.warning("added with index %d" % worker_index)
-                    #    continue
-                    #else:
                     l.debug("Queue is empty, exiting from _worker_helper()", "-", self.cluster)
                     break
             except KeyboardInterrupt:
